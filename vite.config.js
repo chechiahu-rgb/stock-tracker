@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  base: '/', // 針對 Vercel 部署，設為根目錄
   plugins: [
     vue(),
     VitePWA({
@@ -23,13 +24,12 @@ export default defineConfig({
       }
     })
   ],
-  // 新增這個 server 區塊：這是突破 CORS 最穩定的本地解法
   server: {
     proxy: {
       '/yahoo': {
-        target: 'https://query1.finance.yahoo.com', // 真實目標網址
-        changeOrigin: true, // 偽裝來源
-        rewrite: (path) => path.replace(/^\/yahoo/, '') // 將 /yahoo 替換為空
+        target: 'https://query1.finance.yahoo.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/yahoo/, '')
       }
     }
   }

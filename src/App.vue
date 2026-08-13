@@ -34,13 +34,11 @@ const formData = ref({
   dividendCash: 0
 })
 
-// --- API 報價與名稱模組 ---
 const fetchStockData = async (ticker) => {
   try {
     const targetUrl = `/yahoo/v8/finance/chart/${ticker}?interval=1d&range=1d`
     const response = await axios.get(targetUrl)
     const result = response.data.chart.result[0]
-    
     return {
       price: result.meta.regularMarketPrice || 0,
       name: result.meta.longName || result.meta.shortName || ticker
