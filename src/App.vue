@@ -33,7 +33,7 @@ ChartJS.register(
 // --- 資料庫設定 ---
 localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
-const TARGET_DB_KEY = 'stock_targets' // 目標價與警戒線資料庫
+const TARGET_DB_KEY = 'stock_targets'
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
@@ -47,7 +47,7 @@ const usTotalCost = ref(0)
 const usUnrealizedPnL = ref(0)
 
 const totalDividendCashTWD = ref(0)
-const yearlyDividendSummary = ref({}) // 各年度股利統計
+const yearlyDividendSummary = ref({})
 
 const transactions = ref([])
 const taiwanPortfolioRaw = ref([])
@@ -58,10 +58,8 @@ const currentTab = ref('TW')
 const viewMode = ref('card')
 const sortOption = ref('value')
 
-// 標的自訂目標價與警戒線儲存表 { ticker: { targetPrice: 1000, stopPrice: 500 } }
 const stockTargets = ref({})
 
-// 圖表控制變數
 const isChartOpen = ref(true)
 const chartType = ref('line')
 const barMarketTab = ref('TW')
@@ -84,7 +82,6 @@ const formData = ref({
   dividendCash: 0
 })
 
-// 折線圖與長條圖設定
 const lineChartData = ref({ labels: [], datasets: [] })
 const lineChartOptions = ref({
   responsive: true,
@@ -116,7 +113,6 @@ const barChartOptions = ref({
   scales: { y: { beginAtZero: true } }
 })
 
-// --- 排序計算屬性 ---
 const taiwanPortfolio = computed(() => {
   const list = [...taiwanPortfolioRaw.value]
   if (sortOption.value === 'ticker') return list.sort((a, b) => a.ticker.localeCompare(b.ticker))
@@ -131,7 +127,6 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
-// --- API 報價與名稱模組 ---
 const fetchStockData = async (ticker) => {
   try {
     const targetUrl = `/yahoo/v8/finance/chart/${ticker}?interval=1d&range=1d`
@@ -147,7 +142,6 @@ const fetchStockData = async (ticker) => {
   }
 }
 
-// --- 核心金融演算法與股利統計計算 ---
 const calculatePortfolio = async () => {
   isCalculating.value = true
   const summary = {}
@@ -162,7 +156,6 @@ const calculatePortfolio = async () => {
 
   sortedTx.forEach(tx => {
     const year = tx.date ? tx.date.split('-')[0] : '未知年份'
-
     if (!runningSummary[tx.ticker]) {
       runningSummary[tx.ticker] = { shares: 0, totalCost: 0, currency: tx.currency }
     }
@@ -191,7 +184,6 @@ const calculatePortfolio = async () => {
         item.totalCost -= cashVal
         const cashInTWD = tx.currency === 'USD' ? cashVal * 32.5 : cashVal
         totalDivTWD += cashInTWD
-        
         if (!yearlyDivs[year]) yearlyDivs[year] = 0
         yearlyDivs[year] += cashInTWD
       }
@@ -209,7 +201,6 @@ const calculatePortfolio = async () => {
     dailyAssetHistory[tx.date] = dayTotalCost
   })
 
-  // 重新整理目前持股狀態
   sortedTx.forEach(tx => {
     if (!summary[tx.ticker]) {
       summary[tx.ticker] = { ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency }
@@ -259,7 +250,6 @@ const calculatePortfolio = async () => {
       item.marketValue = item.currentPrice * item.shares
       item.pnlPercent = item.totalCost > 0 ? (item.unrealizedPnL / item.totalCost) * 100 : 0
 
-      // 綁定目標價與警戒線
       const tSetting = stockTargets.value[ticker] || {}
       item.targetPrice = tSetting.targetPrice ? Number(tSetting.targetPrice) : null
       item.stopPrice = tSetting.stopPrice ? Number(tSetting.stopPrice) : null
@@ -318,7 +308,6 @@ const calculatePortfolio = async () => {
   isCalculating.value = false
 }
 
-// 更新長條圖數據
 const updateBarChartData = () => {
   const targetList = barMarketTab.value === 'TW' ? taiwanPortfolioRaw.value : usPortfolioRaw.value
   const sorted = [...targetList].sort((a, b) => b.marketValue - a.marketValue)
@@ -354,7 +343,7 @@ const updateBarChartData = () => {
   }
 }
 
-// --- 資料庫讀寫 ---
+// --- 資料庫讀寫與備份還原功能 ---
 const loadTransactions = async () => {
   const savedData = await localforage.getItem(DB_KEY)
   if (savedData) transactions.value = savedData
@@ -389,6 +378,55 @@ const deleteTransaction = async (id) => {
   transactions.value = transactions.value.filter(tx => tx.id !== id)
   await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
   await calculatePortfolio()
+}
+
+// 匯出備份 (JSON) 檔名格式: Stock-holdings_dmy (dmy為年月日)
+const exportBackup = () => {
+  const backupData = {
+    transactions: transactions.value,
+    stockTargets: stockTargets.value,
+    exportDate: new Date().toISOString()
+  }
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2))
+  const now = new Date()
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  
+  const downloadAnchor = document.createElement('a')
+  downloadAnchor.setAttribute("href", dataStr)
+  downloadAnchor.setAttribute("download", `Stock-holdings_${yyyy}${mm}${dd}.json`)
+  document.body.appendChild(downloadAnchor)
+  downloadAnchor.click()
+  downloadAnchor.remove()
+}
+
+// 匯入還原 (JSON)
+const importBackup = async (event) => {
+  const file = event.target.files[0]
+  if (!file) return
+
+  const reader = new FileReader()
+  reader.onload = async (e) => {
+    try {
+      const content = JSON.parse(e.target.result)
+      if (content.transactions && Array.isArray(content.transactions)) {
+        transactions.value = content.transactions
+        await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
+      }
+      if (content.stockTargets) {
+        stockTargets.value = content.stockTargets
+        await localforage.setItem(TARGET_DB_KEY, JSON.parse(JSON.stringify(stockTargets.value)))
+      }
+      await calculatePortfolio()
+      alert('資料還原成功！')
+    } catch (err) {
+      alert('檔案格式錯誤，還原失敗！')
+      console.error(err)
+    }
+    event.target.value = '' // 清空檔案 input
+  }
+  reader.readAsText(file)
 }
 
 const openTargetModal = (ticker) => {
@@ -475,6 +513,15 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- 資料備份與還原工具列 -->
+      <div class="backup-toolbar">
+        <button @click="exportBackup" class="backup-btn">📤 匯出備份 (JSON)</button>
+        <label class="backup-btn import-btn">
+          📥 匯入還原
+          <input type="file" accept=".json" @change="importBackup" style="display: none;">
+        </label>
+      </div>
+
       <div class="realized-pnl-box">
         <span>總已實現損益：</span>
         <strong :class="totalRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
@@ -552,7 +599,6 @@ onMounted(() => {
               <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
                 未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
               </p>
-              <!-- 目標價與停損警戒線提示 -->
               <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
                 <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
                 <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
@@ -579,9 +625,6 @@ onMounted(() => {
               <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
                 <td @click="selectedTickerModal = stock.ticker">
                   <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                  <div v-if="(stock.targetPrice && stock.currentPrice >= stock.targetPrice) || (stock.stopPrice && stock.currentPrice <= stock.stopPrice)">
-                    <small :class="stock.currentPrice >= stock.targetPrice ? 'profit' : 'loss'">【觸及目標/警戒】</small>
-                  </div>
                 </td>
                 <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
                 <td @click="selectedTickerModal = stock.ticker">
@@ -770,11 +813,16 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .market-summary-item { text-align: center; flex: 1; }
 .market-summary-item:first-child { border-right: 1px solid #eee; }
 
-/* 股利統計區塊樣式 */
 .dividend-summary-box { background: #fff; padding: 8px 12px; border-radius: 8px; margin: 8px 0; font-size: 0.9em; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: left; }
 .div-highlight { color: #0284c7; font-weight: bold; }
 .yearly-div-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .yearly-tag { background: #f0f9ff; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; border: 1px solid #bae6fd; }
+
+/* 備份工具列樣式 */
+.backup-toolbar { display: flex; gap: 10px; margin: 10px 0; }
+.backup-btn { flex: 1; background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
+.backup-btn:hover { background: #f1f5f9; }
+.import-btn { display: flex; align-items: center; justify-content: center; }
 
 .realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
@@ -811,7 +859,6 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .card-body { cursor: pointer; }
 .card-body p { margin: 5px 0; font-size: 0.95em; color: #555; }
 
-/* 目標價/警戒線提示標籤 */
 .target-alert-box { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 .alert-badge { font-size: 0.8em; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
 .target-hit { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
