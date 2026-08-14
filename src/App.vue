@@ -52,8 +52,6 @@ const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
 const currentTab = ref('TW')
 const viewMode = ref('card')
-
-// 排序選項變數 ('ticker' | 'shares' | 'value')
 const sortOption = ref('value')
 
 // 圖表控制變數
@@ -112,7 +110,7 @@ const barChartOptions = ref({
   scales: { y: { beginAtZero: true } }
 })
 
-// --- 排序計算屬性 (支援代號、股數、市值排序) ---
+// --- 排序計算屬性 ---
 const taiwanPortfolio = computed(() => {
   const list = [...taiwanPortfolioRaw.value]
   if (sortOption.value === 'ticker') {
@@ -120,7 +118,6 @@ const taiwanPortfolio = computed(() => {
   } else if (sortOption.value === 'shares') {
     return list.sort((a, b) => b.shares - a.shares)
   } else {
-    // 預設依市值由大到小
     return list.sort((a, b) => b.marketValue - a.marketValue)
   }
 })
@@ -475,7 +472,7 @@ onMounted(() => {
       <button :class="['tab-btn', currentTab === 'US' ? 'active' : '']" @click="currentTab = 'US'">美股市場</button>
     </div>
 
-    <!-- 檢視模式與排序選單列 -->
+    <!-- 控制列 (排序與顯示模式) -->
     <div class="control-bar">
       <div class="sort-group">
         <span>排序：</span>
@@ -509,6 +506,7 @@ onMounted(() => {
             </div>
             <div class="card-body">
               <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
+              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
               <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
               <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
                 未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
@@ -523,7 +521,7 @@ onMounted(() => {
               <tr>
                 <th>標的</th>
                 <th>股數</th>
-                <th>現價</th>
+                <th>現價 / 市值</th>
                 <th>均價</th>
                 <th>未實現損益</th>
               </tr>
@@ -532,7 +530,7 @@ onMounted(() => {
               <tr v-for="stock in taiwanPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
                 <td><strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small></td>
                 <td>{{ stock.shares.toLocaleString() }}</td>
-                <td>${{ stock.currentPrice.toFixed(2) }}</td>
+                <td>${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small></td>
                 <td>${{ stock.avgCost.toFixed(2) }}</td>
                 <td :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
                   ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
@@ -559,6 +557,7 @@ onMounted(() => {
             </div>
             <div class="card-body">
               <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
+              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
               <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
               <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
                 未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
@@ -573,7 +572,7 @@ onMounted(() => {
               <tr>
                 <th>標的</th>
                 <th>股數</th>
-                <th>現價</th>
+                <th>現價 / 市值</th>
                 <th>均價</th>
                 <th>未實現損益</th>
               </tr>
@@ -582,7 +581,7 @@ onMounted(() => {
               <tr v-for="stock in usPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
                 <td><strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small></td>
                 <td>{{ stock.shares.toLocaleString() }}</td>
-                <td>${{ stock.currentPrice.toFixed(2) }}</td>
+                <td>${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small></td>
                 <td>${{ stock.avgCost.toFixed(2) }}</td>
                 <td :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
                   ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
@@ -709,7 +708,6 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
 .tab-btn.active { background: white; color: #007aff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
 
-/* 控制列（排序選單與檢視模式） */
 .control-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; font-size: 0.9em; color: #555; background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e0e0e0; }
 .sort-group { display: flex; align-items: center; }
 .sort-select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: 0.9em; color: #333; }
