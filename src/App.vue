@@ -61,6 +61,7 @@ const sortOption = ref('value')
 const stockTargets = ref({})
 
 const isChartOpen = ref(true)
+const isHistoryOpen = ref(true) // 歷史交易紀錄收合控制變數
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
@@ -343,7 +344,6 @@ const updateBarChartData = () => {
   }
 }
 
-// --- 資料庫讀寫與備份還原功能 ---
 const loadTransactions = async () => {
   const savedData = await localforage.getItem(DB_KEY)
   if (savedData) transactions.value = savedData
@@ -380,7 +380,6 @@ const deleteTransaction = async (id) => {
   await calculatePortfolio()
 }
 
-// 匯出備份 (JSON) 檔名格式: Stock-holdings_dmy (dmy為年月日)
 const exportBackup = () => {
   const backupData = {
     transactions: transactions.value,
@@ -401,7 +400,6 @@ const exportBackup = () => {
   downloadAnchor.remove()
 }
 
-// 匯入還原 (JSON)
 const importBackup = async (event) => {
   const file = event.target.files[0]
   if (!file) return
@@ -424,7 +422,7 @@ const importBackup = async (event) => {
       alert('檔案格式錯誤，還原失敗！')
       console.error(err)
     }
-    event.target.value = '' // 清空檔案 input
+    event.target.value = ''
   }
   reader.readAsText(file)
 }
@@ -503,7 +501,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 股利收入統計專區 -->
       <div class="dividend-summary-box">
         <p><strong>總累積現金股利：</strong> <span class="div-highlight">${{ totalDividendCashTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
         <div class="yearly-div-list" v-if="Object.keys(yearlyDividendSummary).length > 0">
@@ -513,7 +510,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 資料備份與還原工具列 -->
       <div class="backup-toolbar">
         <button @click="exportBackup" class="backup-btn">📤 匯出備份 (JSON)</button>
         <label class="backup-btn import-btn">
@@ -702,24 +698,32 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 全部歷史交易紀錄 (暗色系風格) -->
+      <!-- 全部歷史交易紀錄 (暗色系風格 - 附帶收合功能) -->
       <section class="history-dark-section">
-        <h3>全部歷史交易紀錄</h3>
-        <p v-if="transactions.length === 0" class="empty-dark-msg">目前尚無交易紀錄。</p>
-        <ul v-else class="tx-dark-list">
-          <li v-for="tx in transactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
-            <div class="tx-info">
-              <strong class="tx-ticker">{{ tx.ticker }}</strong>
-              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
-              <br>
-              <small class="tx-sub">{{ tx.date }} | 
-                <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} {{ tx.currency }}</span>
-                <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
-              </small>
-            </div>
-            <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
-          </li>
-        </ul>
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">全部歷史交易紀錄</h3>
+          <button @click="isHistoryOpen = !isHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isHistoryOpen" style="margin-top: 15px;">
+          <p v-if="transactions.length === 0" class="empty-dark-msg">目前尚無交易紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in transactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.ticker }}</strong>
+                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 
+                  <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} {{ tx.currency }}</span>
+                  <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
+                </small>
+              </div>
+              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </li>
+          </ul>
+        </div>
       </section>
     </main>
 
@@ -818,7 +822,6 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .yearly-div-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .yearly-tag { background: #f0f9ff; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; border: 1px solid #bae6fd; }
 
-/* 備份工具列樣式 */
 .backup-toolbar { display: flex; gap: 10px; margin: 10px 0; }
 .backup-btn { flex: 1; background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
 .backup-btn:hover { background: #f1f5f9; }
@@ -875,9 +878,8 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .stock-table tr:hover { background: #f1f5f9; }
 
 .history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 30px; }
-.history-dark-section h3 { margin-top: 0; color: #f1f5f9; border-bottom: 1px solid #334155; padding-bottom: 10px; }
-.empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; }
-.tx-dark-list { list-style: none; padding: 0; margin: 0; }
+.empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; margin-top: 10px; }
+.tx-dark-list { list-style: none; padding: 0; margin: 0; margin-top: 10px; }
 .tx-dark-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
 .tx-ticker { color: #ffffff; font-size: 1.05em; }
 .tx-sub { color: #94a3b8; }
