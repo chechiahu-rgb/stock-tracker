@@ -2,13 +2,14 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import localforage from 'localforage'
-import { Line } from 'vue-chartjs'
+import { Line, Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   Title,
   Tooltip,
   Legend,
@@ -20,6 +21,7 @@ ChartJS.register(
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   Title,
   Tooltip,
   Legend,
@@ -49,8 +51,10 @@ const isCalculating = ref(false)
 const currentTab = ref('TW')
 const viewMode = ref('card')
 
-// 圖表展開/收合控制變數 (預設為展開 true)
+// 圖表控制變數
 const isChartOpen = ref(true)
+const chartType = ref('line') // 'line' 折線圖 或 'bar' 長條圖
+const barMarketTab = ref('TW') // 長條圖下的市場選擇: 'TW' 台股 或 'US' 美股
 
 const showForm = ref(false)
 const selectedTickerModal = ref(null)
@@ -66,20 +70,22 @@ const formData = ref({
   dividendCash: 0
 })
 
-const chartData = ref({
-  labels: [],
-  datasets: []
-})
-
-const chartOptions = ref({
+// 折線圖資料
+const lineChartData = ref({ labels: [], datasets: [] })
+const lineChartOptions = ref({
   responsive: true,
   maintainAspectRatio: false,
-  plugins: {
-    legend: { display: true, position: 'top' }
-  },
-  scales: {
-    y: { beginAtZero: false }
-  }
+  plugins: { legend: { display: true, position: 'top' } },
+  scales: { y: { beginAtZero: false } }
+})
+
+// 長條圖資料
+const barChartData = ref({ labels: [], datasets: [] })
+const barChartOptions = ref({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { display: false } },
+  scales: { y: { beginAtZero: true } }
 })
 
 // --- API 報價與名稱模組 ---
@@ -99,7 +105,7 @@ const fetchStockData = async (ticker) => {
   }
 }
 
-// --- 核心金融演算法與歷史資產圖表計算 ---
+// --- 核心金融演算法與圖表資料更新 ---
 const calculatePortfolio = async () => {
   isCalculating.value = true
   const summary = {}
@@ -227,6 +233,7 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
+  // 1. 折線圖資料更新
   const labels = Object.keys(dailyAssetHistory)
   const dataValues = Object.values(dailyAssetHistory)
   const todayStr = new Date().toISOString().split('T')[0]
@@ -235,7 +242,7 @@ const calculatePortfolio = async () => {
     dataValues.push(totalTWD)
   }
 
-  chartData.value = {
+  lineChartData.value = {
     labels: labels,
     datasets: [
       {
@@ -250,7 +257,29 @@ const calculatePortfolio = async () => {
     ]
   }
 
+  // 2. 長條圖資料更新 (根據當前選擇的 barMarketTab 產生市值排序長條圖)
+  updateBarChartData()
+
   isCalculating.value = false
+}
+
+// 更新長條圖數據函式
+const updateBarChartData = () => {
+  const targetList = barMarketTab.value === 'TW' ? taiwanPortfolio.value : usPortfolio.value
+  // 依照市值由大到小排序
+  const sorted = [...targetList].sort((a, b) => b.marketValue - a.marketValue)
+
+  barChartData.value = {
+    labels: sorted.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name),
+    datasets: [
+      {
+        label: '市值',
+        backgroundColor: '#3b82f6',
+        data: sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue),
+        borderRadius: 4
+      }
+    ]
+  }
 }
 
 // --- 資料庫讀寫 ---
@@ -352,16 +381,27 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 資產折線圖區塊 (附帶右上角收合/展開按鈕) -->
-    <section class="chart-section" v-if="chartData.labels.length > 0">
+    <!-- 圖表區塊 (含折線圖/長條圖切換、台美股市場選擇與收合按鈕) -->
+    <section class="chart-section">
       <div class="chart-header-row">
-        <h3>資產歷史折線圖</h3>
+        <div class="chart-type-selector">
+          <button :class="['type-btn', chartType === 'line' ? 'active-type' : '']" @click="chartType = 'line'">資產折線圖</button>
+          <button :class="['type-btn', chartType === 'bar' ? 'active-type' : '']" @click="chartType = 'bar'">個股市值長條圖</button>
+        </div>
         <button @click="isChartOpen = !isChartOpen" class="toggle-chart-btn">
-          {{ isChartOpen ? '收起圖表 🔼' : '展開圖表 🔽' }}
+          {{ isChartOpen ? '收起 🔼' : '展開 🔽' }}
         </button>
       </div>
+
+      <!-- 若切換至長條圖，顯示台股/美股市場選擇按鈕 -->
+      <div v-if="chartType === 'bar' && isChartOpen" class="bar-market-selector">
+        <button :class="['bar-sub-btn', barMarketTab === 'TW' ? 'active-sub' : '']" @click="barMarketTab = 'TW'; updateBarChartData()">台股個股</button>
+        <button :class="['bar-sub-btn', barMarketTab === 'US' ? 'active-sub' : '']" @click="barMarketTab = 'US'; updateBarChartData()">美股個股</button>
+      </div>
+
       <div class="chart-container" v-show="isChartOpen">
-        <Line :data="chartData" :options="chartOptions" />
+        <Line v-if="chartType === 'line'" :data="lineChartData" :options="lineChartOptions" />
+        <Bar v-else :data="barChartData" :options="barChartOptions" />
       </div>
     </section>
 
@@ -577,13 +617,20 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 
 .realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
-/* 折線圖區塊與收合按鈕樣式 */
+/* 圖表區塊與切換控制樣式 */
 .chart-section { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
 .chart-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.chart-section h3 { margin: 0; font-size: 1.1em; color: #333; }
+.chart-type-selector { display: flex; background: #e5e5ea; border-radius: 6px; padding: 2px; }
+.type-btn { background: transparent; border: none; padding: 6px 12px; font-size: 0.85em; font-weight: bold; color: #666; cursor: pointer; border-radius: 4px; }
+.type-btn.active-type { background: white; color: #007aff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+.bar-market-selector { display: flex; margin-bottom: 10px; background: #f1f5f9; padding: 4px; border-radius: 6px; }
+.bar-sub-btn { flex: 1; background: transparent; border: none; padding: 6px; font-size: 0.85em; font-weight: bold; color: #64748b; cursor: pointer; border-radius: 4px; }
+.bar-sub-btn.active-sub { background: #3b82f6; color: white; }
+
 .toggle-chart-btn { background: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
 .toggle-chart-btn:hover { background: #e2e8f0; }
-.chart-container { position: relative; height: 220px; width: 100%; margin-top: 10px; }
+.chart-container { position: relative; height: 240px; width: 100%; margin-top: 10px; }
 
 .tab-container { display: flex; margin-bottom: 10px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
