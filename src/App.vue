@@ -61,7 +61,14 @@ const sortOption = ref('value')
 const stockTargets = ref({})
 
 const isChartOpen = ref(true)
-const isHistoryOpen = ref(true) // 歷史交易紀錄收合控制變數
+const isHistoryOpen = ref(true)
+const isTaiwanOpen = ref(true) // 台股庫存收合狀態
+const isUsOpen = ref(true)     // 美股庫存收合狀態
+
+// 歷史紀錄篩選條件
+const historySearchQuery = ref('')
+const historyTypeFilter = ref('全部')
+
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
@@ -126,6 +133,15 @@ const usPortfolio = computed(() => {
   if (sortOption.value === 'ticker') return list.sort((a, b) => a.ticker.localeCompare(b.ticker))
   if (sortOption.value === 'shares') return list.sort((a, b) => b.shares - a.shares)
   return list.sort((a, b) => b.marketValue - a.marketValue)
+})
+
+// 歷史紀錄篩選計算屬性
+const filteredHistoryTransactions = computed(() => {
+  return transactions.value.slice().reverse().filter(tx => {
+    const matchTicker = tx.ticker.toLowerCase().includes(historySearchQuery.value.toLowerCase().trim())
+    const matchType = historyTypeFilter.value === '全部' || tx.type === historyTypeFilter.value
+    return matchTicker && matchType
+  })
 })
 
 const fetchStockData = async (ticker) => {
@@ -574,131 +590,147 @@ onMounted(() => {
     </div>
 
     <main>
-      <!-- 台股市場區塊 -->
+      <!-- 台股市場區塊 (附帶收合功能) -->
       <section v-if="currentTab === 'TW'" class="portfolio">
-        <h3>台股持股庫存</h3>
-        <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
-        
-        <div v-else-if="viewMode === 'card'" class="card-grid">
-          <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
-            <div class="card-header" @click="selectedTickerModal = stock.ticker">
-              <div>
-                <strong class="stock-name">{{ stock.name }}</strong> 
-                <span class="stock-ticker">({{ stock.ticker }})</span>
-              </div>
-              <span>{{ stock.shares.toLocaleString() }} 股</span>
-            </div>
-            <div class="card-body" @click="selectedTickerModal = stock.ticker">
-              <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
-              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
-              <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
-              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
-              </p>
-              <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
-                <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
-                <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
-              </div>
-            </div>
-            <div class="card-footer-action">
-              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-            </div>
-          </div>
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">台股持股庫存</h3>
+          <button @click="isTaiwanOpen = !isTaiwanOpen" class="toggle-chart-btn">
+            {{ isTaiwanOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
 
-        <div v-else class="table-container">
-          <table class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>股數</th>
-                <th>現價 / 市值</th>
-                <th>均價</th>
-                <th>未實現損益</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
-                <td @click="selectedTickerModal = stock.ticker">
-                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                <td @click="selectedTickerModal = stock.ticker">
-                  ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-show="isTaiwanOpen">
+          <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
+          
+          <div v-else-if="viewMode === 'card'" class="card-grid">
+            <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
+              <div class="card-header" @click="selectedTickerModal = stock.ticker">
+                <div>
+                  <strong class="stock-name">{{ stock.name }}</strong> 
+                  <span class="stock-ticker">({{ stock.ticker }})</span>
+                </div>
+                <span>{{ stock.shares.toLocaleString() }} 股</span>
+              </div>
+              <div class="card-body" @click="selectedTickerModal = stock.ticker">
+                <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
+                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
+                <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
+                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
+                </p>
+                <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
+                  <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
+                  <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
+                </div>
+              </div>
+              <div class="card-footer-action">
+                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="table-container">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>股數</th>
+                  <th>現價 / 市值</th>
+                  <th>均價</th>
+                  <th>未實現損益</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
+                  <td @click="selectedTickerModal = stock.ticker">
+                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                  <td @click="selectedTickerModal = stock.ticker">
+                    ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <!-- 美股市場區塊 -->
+      <!-- 美股市場區塊 (附帶收合功能) -->
       <section v-if="currentTab === 'US'" class="portfolio">
-        <h3>美股持股庫存</h3>
-        <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
-        
-        <div v-else-if="viewMode === 'card'" class="card-grid">
-          <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
-            <div class="card-header" @click="selectedTickerModal = stock.ticker">
-              <div>
-                <strong class="stock-name">{{ stock.name }}</strong> 
-                <span class="stock-ticker">({{ stock.ticker }})</span>
-              </div>
-              <span>{{ stock.shares.toLocaleString() }} 股</span>
-            </div>
-            <div class="card-body" @click="selectedTickerModal = stock.ticker">
-              <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
-              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
-              <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
-              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
-              </p>
-              <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
-                <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
-                <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
-              </div>
-            </div>
-            <div class="card-footer-action">
-              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-            </div>
-          </div>
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">美股持股庫存</h3>
+          <button @click="isUsOpen = !isUsOpen" class="toggle-chart-btn">
+            {{ isUsOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
 
-        <div v-else class="table-container">
-          <table class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>股數</th>
-                <th>現價 / 市值</th>
-                <th>均價</th>
-                <th>未實現損益</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in usPortfolio" :key="stock.ticker">
-                <td @click="selectedTickerModal = stock.ticker">
-                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                <td @click="selectedTickerModal = stock.ticker">
-                  ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-show="isUsOpen">
+          <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
+          
+          <div v-else-if="viewMode === 'card'" class="card-grid">
+            <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
+              <div class="card-header" @click="selectedTickerModal = stock.ticker">
+                <div>
+                  <strong class="stock-name">{{ stock.name }}</strong> 
+                  <span class="stock-ticker">({{ stock.ticker }})</span>
+                </div>
+                <span>{{ stock.shares.toLocaleString() }} 股</span>
+              </div>
+              <div class="card-body" @click="selectedTickerModal = stock.ticker">
+                <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
+                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
+                <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
+                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
+                </p>
+                <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
+                  <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
+                  <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
+                </div>
+              </div>
+              <div class="card-footer-action">
+                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="table-container">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>股數</th>
+                  <th>現價 / 市值</th>
+                  <th>均價</th>
+                  <th>未實現損益</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in usPortfolio" :key="stock.ticker">
+                  <td @click="selectedTickerModal = stock.ticker">
+                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                  <td @click="selectedTickerModal = stock.ticker">
+                    ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <!-- 全部歷史交易紀錄 (暗色系風格 - 附帶收合功能) -->
+      <!-- 全部歷史交易紀錄 (暗色系風格 - 附帶收合與智慧搜尋篩選功能) -->
       <section class="history-dark-section">
         <div class="chart-header-row" style="margin-bottom: 0;">
           <h3 style="margin: 0; border: none; padding: 0;">全部歷史交易紀錄</h3>
@@ -708,9 +740,20 @@ onMounted(() => {
         </div>
         
         <div v-show="isHistoryOpen" style="margin-top: 15px;">
-          <p v-if="transactions.length === 0" class="empty-dark-msg">目前尚無交易紀錄。</p>
+          <!-- 搜尋與篩選工具列 -->
+          <div class="history-filter-bar">
+            <input v-model="historySearchQuery" type="text" placeholder="搜尋代號 (如 2330)..." class="history-search-input">
+            <select v-model="historyTypeFilter" class="history-type-select">
+              <option value="全部">全部類型</option>
+              <option value="買進">買進</option>
+              <option value="賣出">賣出</option>
+              <option value="配息">配息</option>
+            </select>
+          </div>
+
+          <p v-if="filteredHistoryTransactions.length === 0" class="empty-dark-msg">找不到符合條件的交易紀錄。</p>
           <ul v-else class="tx-dark-list">
-            <li v-for="tx in transactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+            <li v-for="tx in filteredHistoryTransactions" :key="tx.id" class="tx-dark-item">
               <div class="tx-info">
                 <strong class="tx-ticker">{{ tx.ticker }}</strong>
                 <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
@@ -878,8 +921,12 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .stock-table tr:hover { background: #f1f5f9; }
 
 .history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 30px; }
+.history-filter-bar { display: flex; gap: 8px; margin-top: 12px; margin-bottom: 12px; }
+.history-search-input { flex: 2; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; }
+.history-type-select { flex: 1; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; }
+
 .empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; margin-top: 10px; }
-.tx-dark-list { list-style: none; padding: 0; margin: 0; margin-top: 10px; }
+.tx-dark-list { list-style: none; padding: 0; margin: 0; }
 .tx-dark-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
 .tx-ticker { color: #ffffff; font-size: 1.05em; }
 .tx-sub { color: #94a3b8; }
