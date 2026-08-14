@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import localforage from 'localforage'
 import { Line, Bar } from 'vue-chartjs'
+import ChartDataLabels from 'chartjs-plugin-datalabels'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -25,7 +26,8 @@ ChartJS.register(
   Title,
   Tooltip,
   Legend,
-  Filler
+  Filler,
+  ChartDataLabels
 )
 
 // --- 資料庫設定 ---
@@ -53,8 +55,8 @@ const viewMode = ref('card')
 
 // 圖表控制變數
 const isChartOpen = ref(true)
-const chartType = ref('line') // 'line' 折線圖 或 'bar' 長條圖
-const barMarketTab = ref('TW') // 長條圖下的市場選擇: 'TW' 台股 或 'US' 美股
+const chartType = ref('line')
+const barMarketTab = ref('TW')
 
 const showForm = ref(false)
 const selectedTickerModal = ref(null)
@@ -70,21 +72,40 @@ const formData = ref({
   dividendCash: 0
 })
 
-// 折線圖資料
+// 折線圖資料與設定
 const lineChartData = ref({ labels: [], datasets: [] })
 const lineChartOptions = ref({
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { display: true, position: 'top' } },
+  plugins: {
+    legend: { display: true, position: 'top' },
+    datalabels: { display: false } // 折線圖不顯示數字標籤
+  },
   scales: { y: { beginAtZero: false } }
 })
 
-// 長條圖資料
+// 長條圖資料與設定 (含底端百分比標籤)
 const barChartData = ref({ labels: [], datasets: [] })
 const barChartOptions = ref({
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { display: false } },
+  plugins: {
+    legend: { display: false },
+    tooltip: { enabled: true },
+    datalabels: {
+      color: '#ffffff',
+      font: { weight: 'bold', size: 11 },
+      anchor: 'start',
+      align: 'end',
+      formatter: (value, context) => {
+        const dataset = context.chart.data.datasets[0].data
+        const total = dataset.reduce((acc, val) => acc + val, 0)
+        if (total === 0) return '0%'
+        const pct = ((value / total) * 100).toFixed(1)
+        return pct + '%'
+      }
+    }
+  },
   scales: { y: { beginAtZero: true } }
 })
 
@@ -233,7 +254,6 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  // 1. 折線圖資料更新
   const labels = Object.keys(dailyAssetHistory)
   const dataValues = Object.values(dailyAssetHistory)
   const todayStr = new Date().toISOString().split('T')[0]
@@ -257,13 +277,12 @@ const calculatePortfolio = async () => {
     ]
   }
 
-  // 2. 長條圖資料更新 (前五大持股 + Others 累加)
   updateBarChartData()
 
   isCalculating.value = false
 }
 
-// 更新長條圖數據函式 (僅顯示前五大，其餘歸戶至 Others)
+// 更新長條圖數據 (前五大 + Others，並透過 datalabels 計算佔比%)
 const updateBarChartData = () => {
   const targetList = barMarketTab.value === 'TW' ? taiwanPortfolio.value : usPortfolio.value
   const sorted = [...targetList].sort((a, b) => b.marketValue - a.marketValue)
@@ -275,12 +294,10 @@ const updateBarChartData = () => {
     chartLabels = sorted.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
     chartValues = sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
   } else {
-    // 前五大
     const top5 = sorted.slice(0, 5)
     chartLabels = top5.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
     chartValues = top5.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
 
-    // 第六名以後全部累加至 Others
     const othersSum = sorted.slice(5).reduce((acc, cur) => {
       const val = barMarketTab.value === 'US' ? cur.marketValue * exchangeRate.value : cur.marketValue
       return acc + val
@@ -402,7 +419,7 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 圖表區塊 (含前五大與 Others 長條圖邏輯、收合按鈕) -->
+    <!-- 圖表區塊 (含長條圖內部底端百分比標籤) -->
     <section class="chart-section">
       <div class="chart-header-row">
         <div class="chart-type-selector">
