@@ -257,25 +257,46 @@ const calculatePortfolio = async () => {
     ]
   }
 
-  // 2. 長條圖資料更新 (根據當前選擇的 barMarketTab 產生市值排序長條圖)
+  // 2. 長條圖資料更新 (前五大持股 + Others 累加)
   updateBarChartData()
 
   isCalculating.value = false
 }
 
-// 更新長條圖數據函式
+// 更新長條圖數據函式 (僅顯示前五大，其餘歸戶至 Others)
 const updateBarChartData = () => {
   const targetList = barMarketTab.value === 'TW' ? taiwanPortfolio.value : usPortfolio.value
-  // 依照市值由大到小排序
   const sorted = [...targetList].sort((a, b) => b.marketValue - a.marketValue)
 
+  let chartLabels = []
+  let chartValues = []
+
+  if (sorted.length <= 5) {
+    chartLabels = sorted.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
+    chartValues = sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
+  } else {
+    // 前五大
+    const top5 = sorted.slice(0, 5)
+    chartLabels = top5.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
+    chartValues = top5.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
+
+    // 第六名以後全部累加至 Others
+    const othersSum = sorted.slice(5).reduce((acc, cur) => {
+      const val = barMarketTab.value === 'US' ? cur.marketValue * exchangeRate.value : cur.marketValue
+      return acc + val
+    }, 0)
+
+    chartLabels.push('Others')
+    chartValues.push(othersSum)
+  }
+
   barChartData.value = {
-    labels: sorted.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name),
+    labels: chartLabels,
     datasets: [
       {
         label: '市值',
         backgroundColor: '#3b82f6',
-        data: sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue),
+        data: chartValues,
         borderRadius: 4
       }
     ]
@@ -381,7 +402,7 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 圖表區塊 (含折線圖/長條圖切換、台美股市場選擇與收合按鈕) -->
+    <!-- 圖表區塊 (含前五大與 Others 長條圖邏輯、收合按鈕) -->
     <section class="chart-section">
       <div class="chart-header-row">
         <div class="chart-type-selector">
@@ -393,10 +414,9 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- 若切換至長條圖，顯示台股/美股市場選擇按鈕 -->
       <div v-if="chartType === 'bar' && isChartOpen" class="bar-market-selector">
-        <button :class="['bar-sub-btn', barMarketTab === 'TW' ? 'active-sub' : '']" @click="barMarketTab = 'TW'; updateBarChartData()">台股個股</button>
-        <button :class="['bar-sub-btn', barMarketTab === 'US' ? 'active-sub' : '']" @click="barMarketTab = 'US'; updateBarChartData()">美股個股</button>
+        <button :class="['bar-sub-btn', barMarketTab === 'TW' ? 'active-sub' : '']" @click="barMarketTab = 'TW'; updateBarChartData()">台股前五大</button>
+        <button :class="['bar-sub-btn', barMarketTab === 'US' ? 'active-sub' : '']" @click="barMarketTab = 'US'; updateBarChartData()">美股前五大</button>
       </div>
 
       <div class="chart-container" v-show="isChartOpen">
@@ -617,7 +637,6 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 
 .realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
-/* 圖表區塊與切換控制樣式 */
 .chart-section { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
 .chart-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .chart-type-selector { display: flex; background: #e5e5ea; border-radius: 6px; padding: 2px; }
