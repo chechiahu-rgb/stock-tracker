@@ -15,7 +15,6 @@ import {
   Filler
 } from 'chart.js'
 
-// 註冊 Chart.js 組件
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -50,6 +49,9 @@ const isCalculating = ref(false)
 const currentTab = ref('TW')
 const viewMode = ref('card')
 
+// 圖表展開/收合控制變數 (預設為展開 true)
+const isChartOpen = ref(true)
+
 const showForm = ref(false)
 const selectedTickerModal = ref(null)
 const formData = ref({
@@ -64,7 +66,6 @@ const formData = ref({
   dividendCash: 0
 })
 
-// 圖表資料響應式變數
 const chartData = ref({
   labels: [],
   datasets: []
@@ -107,7 +108,6 @@ const calculatePortfolio = async () => {
 
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
 
-  // 用於計算歷史資產走勢的時序紀錄
   const dailyAssetHistory = {}
   let runningSummary = {}
 
@@ -138,20 +138,18 @@ const calculatePortfolio = async () => {
       if (tx.dividendCash) item.totalCost -= Number(tx.dividendCash)
     }
 
-    // 簡易每日資產加總 (以歷史交易當下的投入成本作為趨勢描繪基礎)
     let dayTotalCost = 0
     for (const t in runningSummary) {
       const st = runningSummary[t]
       if (st.shares > 0) {
         let val = st.totalCost
-        if (st.currency === 'USD') val *= 32.5 // 歷史趨勢簡化用預設匯率
+        if (st.currency === 'USD') val *= 32.5
         dayTotalCost += val
       }
     }
     dailyAssetHistory[tx.date] = dayTotalCost
   })
 
-  // 重新整理目前的完整持股總覽
   sortedTx.forEach(tx => {
     if (!summary[tx.ticker]) {
       summary[tx.ticker] = { ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency, totalDividendCash: 0 }
@@ -229,10 +227,8 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  // 建立圖表資料
   const labels = Object.keys(dailyAssetHistory)
   const dataValues = Object.values(dailyAssetHistory)
-  // 如果今天有最新市值，將今日點位補上
   const todayStr = new Date().toISOString().split('T')[0]
   if (!labels.includes(todayStr) && totalTWD > 0) {
     labels.push(todayStr)
@@ -356,10 +352,15 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 資產折線圖區塊 -->
+    <!-- 資產折線圖區塊 (附帶右上角收合/展開按鈕) -->
     <section class="chart-section" v-if="chartData.labels.length > 0">
-      <h3>資產歷史折線圖</h3>
-      <div class="chart-container">
+      <div class="chart-header-row">
+        <h3>資產歷史折線圖</h3>
+        <button @click="isChartOpen = !isChartOpen" class="toggle-chart-btn">
+          {{ isChartOpen ? '收起圖表 🔼' : '展開圖表 🔽' }}
+        </button>
+      </div>
+      <div class="chart-container" v-show="isChartOpen">
         <Line :data="chartData" :options="chartOptions" />
       </div>
     </section>
@@ -576,10 +577,13 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 
 .realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
-/* 折線圖區塊樣式 */
+/* 折線圖區塊與收合按鈕樣式 */
 .chart-section { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
-.chart-section h3 { margin-top: 0; font-size: 1.1em; color: #333; margin-bottom: 10px; }
-.chart-container { position: relative; height: 220px; width: 100%; }
+.chart-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.chart-section h3 { margin: 0; font-size: 1.1em; color: #333; }
+.toggle-chart-btn { background: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
+.toggle-chart-btn:hover { background: #e2e8f0; }
+.chart-container { position: relative; height: 220px; width: 100%; margin-top: 10px; }
 
 .tab-container { display: flex; margin-bottom: 10px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
