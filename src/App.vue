@@ -11,14 +11,21 @@ const DB_KEY = 'tx_records'
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
-const totalRealizedPnLTWD = ref(0) // 總已實現損益 (折算台幣)
+const totalRealizedPnLTWD = ref(0)
+
+// 各自市場的未實現損益與成本統計
+const taiwanTotalCost = ref(0)
+const taiwanUnrealizedPnL = ref(0)
+const usTotalCost = ref(0)
+const usUnrealizedPnL = ref(0)
 
 const transactions = ref([])
 const taiwanPortfolio = ref([])
 const usPortfolio = ref([])
 const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
-const currentTab = ref('TW')
+const currentTab = ref('TW') // 'TW' 或 'US'
+const viewMode = ref('card') // 'card' 卡片檢視 或 'list' 細項列表
 
 const showForm = ref(false)
 const selectedTickerModal = ref(null)
@@ -34,11 +41,13 @@ const formData = ref({
   dividendCash: 0
 })
 
+// --- API 報價與名稱模組 ---
 const fetchStockData = async (ticker) => {
   try {
     const targetUrl = `/yahoo/v8/finance/chart/${ticker}?interval=1d&range=1d`
     const response = await axios.get(targetUrl)
     const result = response.data.chart.result[0]
+    
     return {
       price: result.meta.regularMarketPrice || 0,
       name: result.meta.longName || result.meta.shortName || ticker
@@ -49,14 +58,13 @@ const fetchStockData = async (ticker) => {
   }
 }
 
-// --- 核心金融演算法 (含已實現與未實現損益) ---
+// --- 核心金融演算法 ---
 const calculatePortfolio = async () => {
   isCalculating.value = true
   const summary = {}
   let realizedTWD = 0
   let realizedUSD = 0
 
-  // 依照日期先後排序交易紀錄，確保已實現損益計算順序正確
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
 
   sortedTx.forEach(tx => {
@@ -71,24 +79,15 @@ const calculatePortfolio = async () => {
       item.shares += tx.shares
       item.totalCost += (tx.price * tx.shares) + tx.fee
     } else if (tx.type === '賣出' && item.shares > 0) {
-      // 計算當下平均成本
       const avgCostPerShare = item.totalCost / item.shares
       const sellShares = tx.shares
-      
-      // 該筆賣出對應的成本
       const costOfSold = avgCostPerShare * sellShares
-      // 該筆賣出的實得金額 (扣除手續費)
       const revenue = (tx.price * sellShares) - tx.fee
-      
-      // 計算已實現損益
       const realizedPnL = revenue - costOfSold
-      if (item.currency === 'USD') {
-        realizedUSD += realizedPnL
-      } else {
-        realizedTWD += realizedPnL
-      }
 
-      // 扣除庫存與成本
+      if (item.currency === 'USD') realizedUSD += realizedPnL
+      else realizedTWD += realizedPnL
+
       item.shares -= sellShares
       item.totalCost -= costOfSold
       if (item.shares <= 0) {
@@ -107,12 +106,16 @@ const calculatePortfolio = async () => {
   const rateData = await fetchStockData('TWD=X')
   if (rateData.price > 0) exchangeRate.value = rateData.price
 
-  // 總已實現損益換算為台幣
   totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRate.value)
 
   let totalTWD = 0
   let twTWD = 0
   let usTWD = 0
+  let twCostSum = 0
+  let twValueSum = 0
+  let usCostSumTWD = 0
+  let usValueSumTWD = 0
+
   const twList = []
   const usList = []
 
@@ -131,12 +134,17 @@ const calculatePortfolio = async () => {
 
       if (item.currency === 'USD') {
         const marketValueTWD = item.marketValue * exchangeRate.value
+        const totalCostTWD = item.totalCost * exchangeRate.value
         usTWD += marketValueTWD
         totalTWD += marketValueTWD
+        usCostSumTWD += totalCostTWD
+        usValueSumTWD += marketValueTWD
         usList.push(item)
       } else {
         twTWD += item.marketValue
         totalTWD += item.marketValue
+        twCostSum += item.totalCost
+        twValueSum += item.marketValue
         twList.push(item)
       }
     }
@@ -147,6 +155,13 @@ const calculatePortfolio = async () => {
   taiwanAssetsTWD.value = twTWD
   usAssetsTWD.value = usTWD
   totalAssetsTWD.value = totalTWD
+
+  taiwanTotalCost.value = twCostSum
+  taiwanUnrealizedPnL.value = twValueSum - twCostSum
+
+  usTotalCost.value = usCostSumTWD
+  usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
+
   isCalculating.value = false
 }
 
@@ -159,10 +174,6 @@ const loadTransactions = async () => {
 
 const saveTransaction = async () => {
   let inputTicker = formData.value.ticker.toUpperCase().trim()
-  if (formData.value.currency === 'TWD' && /^\d+$/.test(inputTicker)) {
-    inputTicker += '.TW'
-  }
-
   const newTx = {
     id: crypto.randomUUID(),
     ticker: inputTicker,
@@ -220,30 +231,61 @@ onMounted(() => {
       <h1>資產總覽</h1>
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
-      <div class="sub-assets">
-        <span>台股：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span> | 
-        <span>美股：${{ usAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+
+      <!-- 子資產與各別未實現損益 -->
+      <div class="sub-assets-box">
+        <div class="market-summary-item">
+          <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+          <br>
+          <small>未實現：
+            <strong :class="taiwanUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ taiwanUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} 
+              ({{ taiwanTotalCost > 0 ? ((taiwanUnrealizedPnL / taiwanTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
+        </div>
+        <div class="market-summary-item">
+          <span>美股市值：${{ usAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+          <br>
+          <small>未實現：
+            <strong :class="usUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ usUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
+              ({{ usTotalCost > 0 ? ((usUnrealizedPnL / usTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
+        </div>
       </div>
-      <!-- 新增已實現損益顯示區塊 -->
+
       <div class="realized-pnl-box">
         <span>總已實現損益：</span>
         <strong :class="totalRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
           ${{ totalRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD
         </strong>
       </div>
-      <small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small>
+      <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
+    <!-- 市場切換標籤 -->
     <div class="tab-container">
       <button :class="['tab-btn', currentTab === 'TW' ? 'active' : '']" @click="currentTab = 'TW'">台股市場</button>
       <button :class="['tab-btn', currentTab === 'US' ? 'active' : '']" @click="currentTab = 'US'">美股市場</button>
     </div>
 
+    <!-- 檢視模式切換 (卡片 vs 細項列表) -->
+    <div class="view-mode-bar">
+      <span>顯示模式：</span>
+      <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片檢視</button>
+      <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">細項列表</button>
+    </div>
+
     <main>
+      <!-- 台股市場區塊 -->
       <section v-if="currentTab === 'TW'" class="portfolio">
         <h3>台股持股庫存</h3>
         <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
-        <div v-else class="card-grid">
+        
+        <!-- 模式一：卡片檢視 -->
+        <div v-else-if="viewMode === 'card'" class="card-grid">
           <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card" @click="selectedTickerModal = stock.ticker">
             <div class="card-header">
               <div>
@@ -261,12 +303,41 @@ onMounted(() => {
             </div>
           </div>
         </div>
+
+        <!-- 模式二：細項列表檢視 -->
+        <div v-else class="table-container">
+          <table class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>股數</th>
+                <th>現價</th>
+                <th>均價</th>
+                <th>未實現損益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in taiwanPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                <td><strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small></td>
+                <td>{{ stock.shares.toLocaleString() }}</td>
+                <td>${{ stock.currentPrice.toFixed(2) }}</td>
+                <td>${{ stock.avgCost.toFixed(2) }}</td>
+                <td :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
+      <!-- 美股市場區塊 -->
       <section v-if="currentTab === 'US'" class="portfolio">
         <h3>美股持股庫存</h3>
         <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
-        <div v-else class="card-grid">
+        
+        <!-- 模式一：卡片檢視 -->
+        <div v-else-if="viewMode === 'card'" class="card-grid">
           <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card" @click="selectedTickerModal = stock.ticker">
             <div class="card-header">
               <div>
@@ -284,34 +355,64 @@ onMounted(() => {
             </div>
           </div>
         </div>
+
+        <!-- 模式二：細項列表檢視 -->
+        <div v-else class="table-container">
+          <table class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>股數</th>
+                <th>現價</th>
+                <th>均價</th>
+                <th>未實現損益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in usPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                <td><strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small></td>
+                <td>{{ stock.shares.toLocaleString() }}</td>
+                <td>${{ stock.currentPrice.toFixed(2) }}</td>
+                <td>${{ stock.avgCost.toFixed(2) }}</td>
+                <td :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section class="history" style="margin-top: 30px;">
+      <!-- 全部歷史交易紀錄 (暗色系風格) -->
+      <section class="history-dark-section">
         <h3>全部歷史交易紀錄</h3>
-        <ul class="tx-list">
-          <li v-for="tx in transactions.slice().reverse()" :key="tx.id" class="tx-item">
+        <p v-if="transactions.length === 0" class="empty-dark-msg">目前尚無交易紀錄。</p>
+        <ul v-else class="tx-dark-list">
+          <li v-for="tx in transactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
             <div class="tx-info">
-              <strong>{{ tx.ticker }}</strong>
-              <span :class="{'tag-buy': tx.type==='買進', 'tag-sell': tx.type==='賣出', 'tag-div': tx.type==='配息'}">{{ tx.type }}</span>
+              <strong class="tx-ticker">{{ tx.ticker }}</strong>
+              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
               <br>
-              <small>{{ tx.date }} | 
+              <small class="tx-sub">{{ tx.date }} | 
                 <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} {{ tx.currency }}</span>
                 <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
               </small>
             </div>
-            <button @click="deleteTransaction(tx.id)" class="delete-btn">刪除</button>
+            <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
           </li>
         </ul>
       </section>
     </main>
 
+    <!-- 浮動新增按鈕 -->
     <button @click="showForm = true" class="fab-button">+</button>
 
+    <!-- 新增交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
       <div class="modal-content">
         <h3>新增紀錄</h3>
         <form @submit.prevent="saveTransaction">
-          <div class="form-group"><label>代號</label><input v-model="formData.ticker" type="text" required placeholder="如 2330 或 NVDA"></div>
+          <div class="form-group"><label>代號 (台股請自帶 .TW)</label><input v-model="formData.ticker" type="text" required placeholder="如 2330.TW 或 NVDA"></div>
           <div class="form-group"><label>日期</label><input v-model="formData.date" type="date" required></div>
           <div class="form-group">
             <label>幣別</label>
@@ -348,19 +449,20 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- 個股歷史紀錄專屬彈窗 -->
     <div v-if="selectedTickerModal" class="modal-overlay" @click.self="selectedTickerModal = null">
       <div class="modal-content">
         <h3>{{ selectedTickerModal }} 歷史紀錄</h3>
-        <ul class="tx-list" style="margin-top: 15px;">
-          <li v-for="tx in filteredTransactions.slice().reverse()" :key="tx.id" class="tx-item">
+        <ul class="tx-dark-list" style="margin-top: 15px;">
+          <li v-for="tx in filteredTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
             <div class="tx-info">
-              <span :class="{'tag-buy': tx.type==='買進', 'tag-sell': tx.type==='賣出', 'tag-div': tx.type==='配息'}">{{ tx.type }}</span>
-              <small>{{ tx.date }} | 
+              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+              <small class="tx-sub">{{ tx.date }} | 
                 <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }}</span>
                 <span v-else>配股: {{ tx.dividendShares }}股 / 現金: ${{ tx.dividendCash }}</span>
               </small>
             </div>
-            <button @click="deleteTransaction(tx.id)" class="delete-btn">刪除</button>
+            <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
           </li>
         </ul>
         <button @click="selectedTickerModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
@@ -372,13 +474,23 @@ onMounted(() => {
 <style scoped>
 .app-container { font-family: sans-serif; padding: 16px; max-width: 600px; margin: 0 auto; padding-bottom: 80px; }
 header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
-.sub-assets { margin: 8px 0; font-size: 0.95em; color: #555; }
-.realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
-.tab-container { display: flex; margin-bottom: 20px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
+.sub-assets-box { display: flex; justify-content: space-around; margin: 12px 0; font-size: 0.95em; color: #333; background: #fff; padding: 10px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.market-summary-item { text-align: center; flex: 1; }
+.market-summary-item:first-child { border-right: 1px solid #eee; }
+
+.realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+
+.tab-container { display: flex; margin-bottom: 10px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
 .tab-btn.active { background: white; color: #007aff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
 
+/* 檢視模式切換列 */
+.view-mode-bar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 15px; font-size: 0.9em; color: #555; }
+.mode-btn { margin-left: 6px; padding: 4px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+.mode-btn.active-mode { background: #007aff; color: white; border-color: #007aff; }
+
+/* 卡片與列表樣式 */
 .card-grid { display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 20px; }
 .stock-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); cursor: pointer; transition: transform 0.1s; }
 .stock-card:hover { transform: scale(1.01); border-color: #007aff; }
@@ -386,14 +498,29 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .stock-name { font-size: 1.1em; color: #111; margin-right: 6px; }
 .stock-ticker { font-size: 0.85em; color: #666; }
 .card-body p { margin: 5px 0; font-size: 0.95em; color: #555; }
+
+.table-container { background: white; border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0; margin-bottom: 20px; }
+.stock-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9em; }
+.stock-table th { background: #f8f9fa; padding: 10px; border-bottom: 1px solid #ddd; color: #333; }
+.stock-table td { padding: 10px; border-bottom: 1px solid #eee; color: #444; cursor: pointer; }
+.stock-table tr:hover { background: #f1f5f9; }
+
+/* 暗色系歷史紀錄區塊 */
+.history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 30px; }
+.history-dark-section h3 { margin-top: 0; color: #f1f5f9; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+.empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; }
+.tx-dark-list { list-style: none; padding: 0; margin: 0; }
+.tx-dark-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
+.tx-ticker { color: #ffffff; font-size: 1.05em; }
+.tx-sub { color: #94a3b8; }
+.tag-dark-buy { background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.tag-dark-sell { background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.tag-dark-div { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.delete-dark-btn { background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+
 .profit { color: #d32f2f !important; font-weight: bold; }
 .loss { color: #388e3c !important; font-weight: bold; }
-.tx-list { list-style: none; padding: 0; }
-.tx-item { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #ddd; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
-.tag-buy { background: #ffebee; color: #d32f2f; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-.tag-sell { background: #e8f5e9; color: #388e3c; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-.tag-div { background: #e3f2fd; color: #1976d2; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-.delete-btn { background: #ff3b30; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+
 .fab-button { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background-color: #007aff; color: white; border: none; border-radius: 50%; font-size: 30px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.2); z-index: 100; }
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: flex-end; z-index: 1000; }
 .modal-content { background: white; width: 100%; max-width: 600px; padding: 20px; border-radius: 20px 20px 0 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); max-height: 85vh; overflow-y: auto; }
