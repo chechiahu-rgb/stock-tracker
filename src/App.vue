@@ -2,6 +2,30 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import localforage from 'localforage'
+import { Line } from 'vue-chartjs'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from 'chart.js'
+
+// 註冊 Chart.js 組件
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+)
 
 // --- 資料庫設定 ---
 localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
@@ -13,7 +37,6 @@ const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
 const totalRealizedPnLTWD = ref(0)
 
-// 各自市場的未實現損益與成本統計
 const taiwanTotalCost = ref(0)
 const taiwanUnrealizedPnL = ref(0)
 const usTotalCost = ref(0)
@@ -24,8 +47,8 @@ const taiwanPortfolio = ref([])
 const usPortfolio = ref([])
 const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
-const currentTab = ref('TW') // 'TW' 或 'US'
-const viewMode = ref('card') // 'card' 卡片檢視 或 'list' 細項列表
+const currentTab = ref('TW')
+const viewMode = ref('card')
 
 const showForm = ref(false)
 const selectedTickerModal = ref(null)
@@ -39,6 +62,23 @@ const formData = ref({
   currency: 'TWD',
   dividendShares: 0,
   dividendCash: 0
+})
+
+// 圖表資料響應式變數
+const chartData = ref({
+  labels: [],
+  datasets: []
+})
+
+const chartOptions = ref({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { display: true, position: 'top' }
+  },
+  scales: {
+    y: { beginAtZero: false }
+  }
 })
 
 // --- API 報價與名稱模組 ---
@@ -58,7 +98,7 @@ const fetchStockData = async (ticker) => {
   }
 }
 
-// --- 核心金融演算法 ---
+// --- 核心金融演算法與歷史資產圖表計算 ---
 const calculatePortfolio = async () => {
   isCalculating.value = true
   const summary = {}
@@ -67,13 +107,15 @@ const calculatePortfolio = async () => {
 
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
 
+  // 用於計算歷史資產走勢的時序紀錄
+  const dailyAssetHistory = {}
+  let runningSummary = {}
+
   sortedTx.forEach(tx => {
-    if (!summary[tx.ticker]) {
-      summary[tx.ticker] = { 
-        ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency, totalDividendCash: 0 
-      }
+    if (!runningSummary[tx.ticker]) {
+      runningSummary[tx.ticker] = { shares: 0, totalCost: 0, currency: tx.currency }
     }
-    const item = summary[tx.ticker]
+    const item = runningSummary[tx.ticker]
 
     if (tx.type === '買進') {
       item.shares += tx.shares
@@ -90,16 +132,41 @@ const calculatePortfolio = async () => {
 
       item.shares -= sellShares
       item.totalCost -= costOfSold
-      if (item.shares <= 0) {
-        item.shares = 0
-        item.totalCost = 0
-      }
+      if (item.shares <= 0) { item.shares = 0; item.totalCost = 0; }
     } else if (tx.type === '配息') {
       if (tx.dividendShares) item.shares += Number(tx.dividendShares)
-      if (tx.dividendCash) {
-        item.totalCost -= Number(tx.dividendCash)
-        item.totalDividendCash += Number(tx.dividendCash)
+      if (tx.dividendCash) item.totalCost -= Number(tx.dividendCash)
+    }
+
+    // 簡易每日資產加總 (以歷史交易當下的投入成本作為趨勢描繪基礎)
+    let dayTotalCost = 0
+    for (const t in runningSummary) {
+      const st = runningSummary[t]
+      if (st.shares > 0) {
+        let val = st.totalCost
+        if (st.currency === 'USD') val *= 32.5 // 歷史趨勢簡化用預設匯率
+        dayTotalCost += val
       }
+    }
+    dailyAssetHistory[tx.date] = dayTotalCost
+  })
+
+  // 重新整理目前的完整持股總覽
+  sortedTx.forEach(tx => {
+    if (!summary[tx.ticker]) {
+      summary[tx.ticker] = { ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency, totalDividendCash: 0 }
+    }
+    const item = summary[tx.ticker]
+    if (tx.type === '買進') {
+      item.shares += tx.shares
+      item.totalCost += (tx.price * tx.shares) + tx.fee
+    } else if (tx.type === '賣出' && item.shares > 0) {
+      const avgCost = item.totalCost / item.shares
+      item.shares -= tx.shares
+      item.totalCost -= avgCost * tx.shares
+    } else if (tx.type === '配息') {
+      if (tx.dividendShares) item.shares += Number(tx.dividendShares)
+      if (tx.dividendCash) item.totalCost -= Number(tx.dividendCash)
     }
   })
 
@@ -161,6 +228,31 @@ const calculatePortfolio = async () => {
 
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
+
+  // 建立圖表資料
+  const labels = Object.keys(dailyAssetHistory)
+  const dataValues = Object.values(dailyAssetHistory)
+  // 如果今天有最新市值，將今日點位補上
+  const todayStr = new Date().toISOString().split('T')[0]
+  if (!labels.includes(todayStr) && totalTWD > 0) {
+    labels.push(todayStr)
+    dataValues.push(totalTWD)
+  }
+
+  chartData.value = {
+    labels: labels,
+    datasets: [
+      {
+        label: '總資產走勢 (TWD)',
+        backgroundColor: 'rgba(0, 122, 255, 0.1)',
+        borderColor: '#007aff',
+        borderWidth: 2,
+        data: dataValues,
+        fill: true,
+        tension: 0.2
+      }
+    ]
+  }
 
   isCalculating.value = false
 }
@@ -232,7 +324,6 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 子資產與各別未實現損益 -->
       <div class="sub-assets-box">
         <div class="market-summary-item">
           <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
@@ -265,13 +356,21 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
+    <!-- 資產折線圖區塊 -->
+    <section class="chart-section" v-if="chartData.labels.length > 0">
+      <h3>資產歷史折線圖</h3>
+      <div class="chart-container">
+        <Line :data="chartData" :options="chartOptions" />
+      </div>
+    </section>
+
     <!-- 市場切換標籤 -->
     <div class="tab-container">
       <button :class="['tab-btn', currentTab === 'TW' ? 'active' : '']" @click="currentTab = 'TW'">台股市場</button>
       <button :class="['tab-btn', currentTab === 'US' ? 'active' : '']" @click="currentTab = 'US'">美股市場</button>
     </div>
 
-    <!-- 檢視模式切換 (卡片 vs 細項列表) -->
+    <!-- 檢視模式切換 -->
     <div class="view-mode-bar">
       <span>顯示模式：</span>
       <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片檢視</button>
@@ -284,7 +383,6 @@ onMounted(() => {
         <h3>台股持股庫存</h3>
         <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
         
-        <!-- 模式一：卡片檢視 -->
         <div v-else-if="viewMode === 'card'" class="card-grid">
           <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card" @click="selectedTickerModal = stock.ticker">
             <div class="card-header">
@@ -304,7 +402,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 模式二：細項列表檢視 -->
         <div v-else class="table-container">
           <table class="stock-table">
             <thead>
@@ -336,7 +433,6 @@ onMounted(() => {
         <h3>美股持股庫存</h3>
         <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
         
-        <!-- 模式一：卡片檢視 -->
         <div v-else-if="viewMode === 'card'" class="card-grid">
           <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card" @click="selectedTickerModal = stock.ticker">
             <div class="card-header">
@@ -356,7 +452,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 模式二：細項列表檢視 -->
         <div v-else class="table-container">
           <table class="stock-table">
             <thead>
@@ -481,16 +576,19 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 
 .realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
+/* 折線圖區塊樣式 */
+.chart-section { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
+.chart-section h3 { margin-top: 0; font-size: 1.1em; color: #333; margin-bottom: 10px; }
+.chart-container { position: relative; height: 220px; width: 100%; }
+
 .tab-container { display: flex; margin-bottom: 10px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
 .tab-btn.active { background: white; color: #007aff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
 
-/* 檢視模式切換列 */
 .view-mode-bar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 15px; font-size: 0.9em; color: #555; }
 .mode-btn { margin-left: 6px; padding: 4px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
 .mode-btn.active-mode { background: #007aff; color: white; border-color: #007aff; }
 
-/* 卡片與列表樣式 */
 .card-grid { display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 20px; }
 .stock-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); cursor: pointer; transition: transform 0.1s; }
 .stock-card:hover { transform: scale(1.01); border-color: #007aff; }
@@ -505,7 +603,6 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .stock-table td { padding: 10px; border-bottom: 1px solid #eee; color: #444; cursor: pointer; }
 .stock-table tr:hover { background: #f1f5f9; }
 
-/* 暗色系歷史紀錄區塊 */
 .history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 30px; }
 .history-dark-section h3 { margin-top: 0; color: #f1f5f9; border-bottom: 1px solid #334155; padding-bottom: 10px; }
 .empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; }
