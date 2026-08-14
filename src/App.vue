@@ -46,12 +46,15 @@ const usTotalCost = ref(0)
 const usUnrealizedPnL = ref(0)
 
 const transactions = ref([])
-const taiwanPortfolio = ref([])
-const usPortfolio = ref([])
+const taiwanPortfolioRaw = ref([])
+const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
 const currentTab = ref('TW')
 const viewMode = ref('card')
+
+// 排序選項變數 ('ticker' | 'shares' | 'value')
+const sortOption = ref('value')
 
 // 圖表控制變數
 const isChartOpen = ref(true)
@@ -79,12 +82,12 @@ const lineChartOptions = ref({
   maintainAspectRatio: false,
   plugins: {
     legend: { display: true, position: 'top' },
-    datalabels: { display: false } // 折線圖不顯示數字標籤
+    datalabels: { display: false }
   },
   scales: { y: { beginAtZero: false } }
 })
 
-// 長條圖資料與設定 (含底端百分比標籤)
+// 長條圖資料與設定
 const barChartData = ref({ labels: [], datasets: [] })
 const barChartOptions = ref({
   responsive: true,
@@ -107,6 +110,30 @@ const barChartOptions = ref({
     }
   },
   scales: { y: { beginAtZero: true } }
+})
+
+// --- 排序計算屬性 (支援代號、股數、市值排序) ---
+const taiwanPortfolio = computed(() => {
+  const list = [...taiwanPortfolioRaw.value]
+  if (sortOption.value === 'ticker') {
+    return list.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  } else if (sortOption.value === 'shares') {
+    return list.sort((a, b) => b.shares - a.shares)
+  } else {
+    // 預設依市值由大到小
+    return list.sort((a, b) => b.marketValue - a.marketValue)
+  }
+})
+
+const usPortfolio = computed(() => {
+  const list = [...usPortfolioRaw.value]
+  if (sortOption.value === 'ticker') {
+    return list.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  } else if (sortOption.value === 'shares') {
+    return list.sort((a, b) => b.shares - a.shares)
+  } else {
+    return list.sort((a, b) => b.marketValue - a.marketValue)
+  }
 })
 
 // --- API 報價與名稱模組 ---
@@ -242,8 +269,8 @@ const calculatePortfolio = async () => {
     }
   }
 
-  taiwanPortfolio.value = twList
-  usPortfolio.value = usList
+  taiwanPortfolioRaw.value = twList
+  usPortfolioRaw.value = usList
   taiwanAssetsTWD.value = twTWD
   usAssetsTWD.value = usTWD
   totalAssetsTWD.value = totalTWD
@@ -282,9 +309,9 @@ const calculatePortfolio = async () => {
   isCalculating.value = false
 }
 
-// 更新長條圖數據 (前五大 + Others，並透過 datalabels 計算佔比%)
+// 更新長條圖數據 (前五大 + Others)
 const updateBarChartData = () => {
-  const targetList = barMarketTab.value === 'TW' ? taiwanPortfolio.value : usPortfolio.value
+  const targetList = barMarketTab.value === 'TW' ? taiwanPortfolioRaw.value : usPortfolioRaw.value
   const sorted = [...targetList].sort((a, b) => b.marketValue - a.marketValue)
 
   let chartLabels = []
@@ -419,7 +446,7 @@ onMounted(() => {
       <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 圖表區塊 (含長條圖內部底端百分比標籤) -->
+    <!-- 圖表區塊 -->
     <section class="chart-section">
       <div class="chart-header-row">
         <div class="chart-type-selector">
@@ -448,11 +475,21 @@ onMounted(() => {
       <button :class="['tab-btn', currentTab === 'US' ? 'active' : '']" @click="currentTab = 'US'">美股市場</button>
     </div>
 
-    <!-- 檢視模式切換 -->
-    <div class="view-mode-bar">
-      <span>顯示模式：</span>
-      <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片檢視</button>
-      <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">細項列表</button>
+    <!-- 檢視模式與排序選單列 -->
+    <div class="control-bar">
+      <div class="sort-group">
+        <span>排序：</span>
+        <select v-model="sortOption" class="sort-select">
+          <option value="value">依資產市值</option>
+          <option value="ticker">依股票代號</option>
+          <option value="shares">依持股股數</option>
+        </select>
+      </div>
+      <div class="view-mode-group">
+        <span>顯示模式：</span>
+        <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片</button>
+        <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">列表</button>
+      </div>
     </div>
 
     <main>
@@ -585,7 +622,7 @@ onMounted(() => {
       <div class="modal-content">
         <h3>新增紀錄</h3>
         <form @submit.prevent="saveTransaction">
-          <div class="form-group"><label>代號 (台股請自帶 .TW)</label><input v-model="formData.ticker" type="text" required placeholder="如 2330.TW 或 NVDA"></div>
+          <div class="form-group"><label>代號 (台股請自帶 .TW 或 .TWO)</label><input v-model="formData.ticker" type="text" required placeholder="如 2330.TW 或 3293.TWO"></div>
           <div class="form-group"><label>日期</label><input v-model="formData.date" type="date" required></div>
           <div class="form-group">
             <label>幣別</label>
@@ -672,7 +709,11 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
 .tab-btn.active { background: white; color: #007aff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
 
-.view-mode-bar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 15px; font-size: 0.9em; color: #555; }
+/* 控制列（排序選單與檢視模式） */
+.control-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; font-size: 0.9em; color: #555; background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e0e0e0; }
+.sort-group { display: flex; align-items: center; }
+.sort-select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: 0.9em; color: #333; }
+.view-mode-group { display: flex; align-items: center; }
 .mode-btn { margin-left: 6px; padding: 4px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
 .mode-btn.active-mode { background: #007aff; color: white; border-color: #007aff; }
 
