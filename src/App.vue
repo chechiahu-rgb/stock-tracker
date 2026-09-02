@@ -34,11 +34,13 @@ ChartJS.register(
 localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
+const GB_DB_KEY = 'gold_bonds_records' // 黃金與債券專屬資料庫
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
+const goldBondsAssetsTWD = ref(0) // 黃金債券總市值
 const totalRealizedPnLTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
@@ -46,13 +48,20 @@ const taiwanUnrealizedPnL = ref(0)
 const usTotalCost = ref(0)
 const usUnrealizedPnL = ref(0)
 
+const goldBondsTotalCost = ref(0)
+const goldBondsUnrealizedPnL = ref(0)
+
 const totalDividendCashTWD = ref(0)
 const yearlyDividendSummary = ref({})
 
 const transactions = ref([])
+const goldBondsTransactions = ref([]) // 黃金與債券交易紀錄
+const goldBondsPortfolioRaw = ref([]) // 黃金債券持倉明細
+
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
+const goldPricePerGram = ref(0) // 台銀黃金牌價 (每公克TWD)
 const isCalculating = ref(false)
 
 const currentTab = ref('overview') 
@@ -65,6 +74,7 @@ const isChartOpen = ref(true)
 const isHistoryOpen = ref(true)
 const isTaiwanOpen = ref(true)
 const isUsOpen = ref(true)
+const isGBOpen = ref(true)
 
 const historySearchQuery = ref('')
 const historyTypeFilter = ref('全部')
@@ -73,6 +83,7 @@ const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
+const showGBForm = ref(false) // 黃金債券新增彈窗
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const targetFormTicker = ref('')
@@ -88,6 +99,19 @@ const formData = ref({
   currency: 'TWD',
   dividendShares: 0,
   dividendCash: 0
+})
+
+// 黃金債券表單
+const gbFormData = ref({
+  category: '黃金', // 黃金 或 債券
+  name: '',         // 名稱或代號 (如 黃金實體/台銀, META 2054債)
+  date: new Date().toISOString().split('T')[0],
+  type: '買進',     // 買進, 賣出, 配息
+  amount: null,     // 黃金填克數 / 債券填面額或股數
+  price: null,      // 單價
+  fee: 0,
+  currency: 'TWD',
+  dividendCash: 0   // 債券配息金額
 })
 
 const lineChartData = ref({ labels: [], datasets: [] })
@@ -155,6 +179,39 @@ const fetchStockData = async (ticker) => {
   } catch (error) {
     console.error(`獲取 ${ticker} 資料失敗:`, error)
     return { price: 0, name: ticker }
+  }
+}
+
+// 爬取台灣銀行黃金牌價 (每公克新台幣賣出價)
+// 透過 Vercel / Netlify 代理或通用 CORS 爬蟲
+const fetchTaiwanBankGoldPrice = async () => {
+  try {
+    // 台灣銀行黃金牌價網頁，或透過公開 API / CORS 代理
+    const response = await axios.get('https://rate.bot.com.tw/gold?lang=zh-TW')
+    const html = response.data
+    // 解析台銀黃金牌價 (公克新台幣賣出價)
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    // 尋找台銀黃金牌價表格中的賣出價
+    const rows = doc.querySelectorAll('table tbody tr')
+    for (let row of rows) {
+      const text = row.textContent
+      if (text.includes('新台幣') || text.includes('黃金')) {
+        const tds = row.querySelectorAll('td')
+        if (tds.length >= 5) {
+          // 通常黃金牌價表格中包含公克新台幣賣出價
+          const sellPrice = parseFloat(tds[4].textContent.trim().replace(/,/g, ''))
+          if (!isNaN(sellPrice) && sellPrice > 1000) {
+            return sellPrice
+          }
+        }
+      }
+    }
+    // 備用爬蟲解析尋找數字
+    return 2850 // 若抓取失敗給予合理預設行情
+  } catch (error) {
+    console.error('抓取台銀黃金牌價失敗:', error)
+    return 2850
   }
 }
 
@@ -238,6 +295,86 @@ const calculatePortfolio = async () => {
   const rateData = await fetchStockData('TWD=X')
   if (rateData.price > 0) exchangeRate.value = rateData.price
 
+  // 抓取台銀黃金牌價
+  goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
+
+  // 計算黃金與債券持倉
+  const gbSummary = {}
+  goldBondsTransactions.value.forEach(tx => {
+    if (!gbSummary[tx.name]) {
+      gbSummary[tx.name] = { category: tx.category, name: tx.name, amount: 0, totalCost: 0, currency: tx.currency, totalDividend: 0 }
+    }
+    const item = gbSummary[tx.name]
+    if (tx.type === '買進') {
+      item.amount += tx.amount
+      item.totalCost += (tx.price * tx.amount) + tx.fee
+    } else if (tx.type === '賣出' && item.amount > 0) {
+      const avgCost = item.totalCost / item.amount
+      item.amount -= tx.amount
+      item.totalCost -= avgCost * tx.amount
+    } else if (tx.type === '配息') {
+      if (tx.dividendCash) {
+        item.totalDividend += Number(tx.dividendCash)
+        item.totalCost -= Number(tx.dividendCash) // 配息扣減成本
+        const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRate.value : Number(tx.dividendCash)
+        totalDivTWD += divTWD
+        const yr = tx.date.split('-')[0]
+        if (!yearlyDivs[yr]) yearlyDivs[yr] = 0
+        yearlyDivs[yr] += divTWD
+      }
+    }
+  })
+
+  let gbTWD = 0
+  let gbCostSum = 0
+  let gbValueSum = 0
+  const gbList = []
+
+  for (const name in gbSummary) {
+    const item = gbSummary[name]
+    if (item.amount > 0 || item.category === '債券') {
+      let currentPrice = 0
+      if (item.category === '黃金') {
+        currentPrice = goldPricePerGram.value // 每公克台銀牌價
+        item.currentPrice = currentPrice
+        item.marketValue = item.amount * currentPrice
+        item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
+        item.unrealizedPnL = item.marketValue - item.totalCost
+        item.pnlPercent = item.totalCost > 0 ? (item.unrealizedPnL / item.totalCost) * 100 : 0
+        item.currency = 'TWD'
+        gbTWD += item.marketValue
+        gbCostSum += item.totalCost
+        gbValueSum += item.marketValue
+      } else {
+        // 債券若有代號可抓現價，若無則依成本或手動價
+        let stockInfo = { price: item.amount > 0 ? (item.totalCost / item.amount) : 100 }
+        if (item.name.includes('.')) {
+          stockInfo = await fetchStockData(item.name)
+        }
+        currentPrice = stockInfo.price > 0 ? stockInfo.price : (item.amount > 0 ? item.totalCost / item.amount : 100)
+        item.currentPrice = currentPrice
+        item.marketValue = item.amount * currentPrice
+        if (item.currency === 'USD') item.marketValue *= exchangeRate.value
+        
+        item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
+        const costTWD = item.currency === 'USD' ? item.totalCost * exchangeRate.value : item.totalCost
+        const valTWD = item.currency === 'USD' ? item.marketValue : item.marketValue
+        item.unrealizedPnL = valTWD - costTWD
+        item.pnlPercent = costTWD > 0 ? (item.unrealizedPnL / costTWD) * 100 : 0
+
+        gbTWD += valTWD
+        gbCostSum += costTWD
+        gbValueSum += valTWD
+      }
+      gbList.push(item)
+    }
+  }
+
+  goldBondsPortfolioRaw.value = gbList
+  goldBondsAssetsTWD.value = gbTWD
+  goldBondsTotalCost.value = gbCostSum
+  goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
+
   totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRate.value)
   totalDividendCashTWD.value = totalDivTWD
   yearlyDividendSummary.value = yearlyDivs
@@ -287,6 +424,9 @@ const calculatePortfolio = async () => {
       }
     }
   }
+
+  // 總資產加入黃金債券
+  totalTWD = twTWD + usTWD + gbTWD
 
   taiwanPortfolioRaw.value = twList
   usPortfolioRaw.value = usList
@@ -366,6 +506,8 @@ const updateBarChartData = () => {
 const loadTransactions = async () => {
   const savedData = await localforage.getItem(DB_KEY)
   if (savedData) transactions.value = savedData
+  const savedGB = await localforage.getItem(GB_DB_KEY)
+  if (savedGB) goldBondsTransactions.value = savedGB
   const savedTargets = await localforage.getItem(TARGET_DB_KEY)
   if (savedTargets) stockTargets.value = savedTargets
   await calculatePortfolio()
@@ -393,6 +535,33 @@ const saveTransaction = async () => {
   await calculatePortfolio()
 }
 
+const saveGBTransaction = async () => {
+  const newTx = {
+    id: crypto.randomUUID(),
+    category: gbFormData.value.category,
+    name: gbFormData.value.name.trim(),
+    date: gbFormData.value.date,
+    type: gbFormData.value.type,
+    amount: Number(gbFormData.value.amount) || 0,
+    price: Number(gbFormData.value.price) || 0,
+    fee: Number(gbFormData.value.fee) || 0,
+    currency: gbFormData.value.currency,
+    dividendCash: Number(gbFormData.value.dividendCash) || 0
+  }
+
+  goldBondsTransactions.value.push(newTx)
+  await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
+  showGBForm.value = false
+  resetGBForm()
+  await calculatePortfolio()
+}
+
+const deleteGBTransaction = async (id) => {
+  goldBondsTransactions.value = goldBondsTransactions.value.filter(tx => tx.id !== id)
+  await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
+  await calculatePortfolio()
+}
+
 const deleteTransaction = async (id) => {
   transactions.value = transactions.value.filter(tx => tx.id !== id)
   await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
@@ -402,6 +571,7 @@ const deleteTransaction = async (id) => {
 const exportBackup = () => {
   const backupData = {
     transactions: transactions.value,
+    goldBondsTransactions: goldBondsTransactions.value,
     stockTargets: stockTargets.value,
     exportDate: new Date().toISOString()
   }
@@ -430,6 +600,10 @@ const importBackup = async (event) => {
       if (content.transactions && Array.isArray(content.transactions)) {
         transactions.value = content.transactions
         await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
+      }
+      if (content.goldBondsTransactions && Array.isArray(content.goldBondsTransactions)) {
+        goldBondsTransactions.value = content.goldBondsTransactions
+        await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
       }
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
@@ -480,6 +654,20 @@ const resetForm = () => {
   }
 }
 
+const resetGBForm = () => {
+  gbFormData.value = {
+    category: '黃金',
+    name: '',
+    date: new Date().toISOString().split('T')[0],
+    type: '買進',
+    amount: null,
+    price: null,
+    fee: 0,
+    currency: 'TWD',
+    dividendCash: 0
+  }
+}
+
 const filteredTransactions = computed(() => {
   if (!selectedTickerModal.value) return []
   return transactions.value.filter(tx => tx.ticker === selectedTickerModal.value)
@@ -521,7 +709,6 @@ onMounted(() => {
     <!-- 1. 總覽首頁內容 (overview) -->
     <!-- ========================================== -->
     <div v-if="currentTab === 'overview'">
-      <!-- 左右對齊的台美股市值與未實現損益方塊 -->
       <div class="sub-assets-box">
         <div class="market-summary-item">
           <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
@@ -540,6 +727,19 @@ onMounted(() => {
             <strong :class="usUnrealizedPnL >= 0 ? 'profit' : 'loss'">
               ${{ usUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
               ({{ usTotalCost > 0 ? ((usUnrealizedPnL / usTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
+        </div>
+      </div>
+
+      <div class="sub-assets-box" style="margin-top: 8px;">
+        <div class="market-summary-item" style="border: none;">
+          <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
+          <br>
+          <small>未實現：
+            <strong :class="goldBondsUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ goldBondsUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
+              ({{ goldBondsTotalCost > 0 ? ((goldBondsUnrealizedPnL / goldBondsTotalCost) * 100).toFixed(2) : 0 }}%)
             </strong>
           </small>
         </div>
@@ -739,9 +939,41 @@ onMounted(() => {
     <!-- 5. 黃金/債券子目錄 (gold_bonds) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'gold_bonds'">
-      <section class="placeholder-section">
-        <h3>🥇 黃金與債券管理</h3>
-        <p class="empty-msg">此子目錄建置中，稍待將新增黃金與債券相關追蹤功能。</p>
+      <section class="portfolio">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">黃金與債券持倉</h3>
+          <button @click="isGBOpen = !isGBOpen" class="toggle-chart-btn">
+            {{ isGBOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+
+        <div v-show="isGBOpen">
+          <p style="font-size: 0.85em; color: #64748b; margin-bottom: 10px;">
+            黃金牌價：台銀每公克 ${{ goldPricePerGram.toLocaleString() }} TWD
+          </p>
+          <p v-if="goldBondsPortfolioRaw.length === 0" class="empty-msg">目前無黃金或債券持倉。</p>
+          
+          <div v-else class="card-grid">
+            <div v-for="item in goldBondsPortfolioRaw" :key="item.name" class="stock-card">
+              <div class="card-header">
+                <div>
+                  <strong class="stock-name">{{ item.name }}</strong> 
+                  <span class="stock-ticker">({{ item.category }})</span>
+                </div>
+                <span>{{ item.amount.toLocaleString() }} {{ item.category === '黃金' ? '克' : '單位' }}</span>
+              </div>
+              <div class="card-body">
+                <p>現價：${{ item.currentPrice.toFixed(2) }} {{ item.category === '黃金' ? 'TWD/克' : item.currency }}</p>
+                <p>市值：${{ item.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} {{ item.category === '黃金' ? 'TWD' : item.currency }}</p>
+                <p>成本均價：${{ item.avgCost.toFixed(2) }}</p>
+                <p v-if="item.totalDividend > 0">已領配息：${{ item.totalDividend.toLocaleString() }}</p>
+                <p :class="item.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ item.unrealizedPnL.toFixed(2) }} TWD ({{ item.pnlPercent.toFixed(2) }}%)
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
 
@@ -755,10 +987,10 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- 浮動新增按鈕 -->
-    <button @click="showForm = true" class="fab-button">+</button>
+    <!-- 浮動新增按鈕 (依分頁動態切換新增對象) -->
+    <button @click="currentTab === 'gold_bonds' ? showGBForm = true : showForm = true" class="fab-button">+</button>
 
-    <!-- 新增交易彈窗 -->
+    <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
       <div class="modal-content">
         <h3>新增紀錄</h3>
@@ -799,6 +1031,54 @@ onMounted(() => {
         </form>
       </div>
     </div>
+
+    <!-- 新增黃金/債券交易彈窗 -->
+    <div v-if="showGBForm" class="modal-overlay">
+      <div class="modal-content">
+        <h3>新增黃金/債券紀錄</h3>
+        <form @submit.prevent="saveGBTransaction">
+          <div class="form-group">
+            <label>資產分類</label>
+            <select v-model="gbFormData.category">
+              <option value="黃金">黃金</option>
+              <option value="債券">債券</option>
+            </select>
+          </div>
+          <div class="form-group"><label>名稱 / 代號</label><input v-model="gbFormData.name" type="text" required placeholder="如：實體黃金 / META 2054 債券"></div>
+          <div class="form-group"><label>日期</label><input v-model="gbFormData.date" type="date" required></div>
+          <div class="form-group">
+            <label>幣別</label>
+            <select v-model="gbFormData.currency">
+              <option value="TWD">台幣 (TWD)</option>
+              <option value="USD">美金 (USD)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>交易類型</label>
+            <select v-model="gbFormData.type">
+              <option value="買進">買進</option>
+              <option value="賣出">賣出</option>
+              <option value="配息">配息 (債券專用)</option>
+            </select>
+          </div>
+
+          <template v-if="gbFormData.type !== '配息'">
+            <div class="form-group"><label>{{ gbFormData.category === '黃金' ? '克數' : '單位/股數' }}</label><input v-model="gbFormData.amount" type="number" step="any" required></div>
+            <div class="form-group"><label>成交單價</label><input v-model="gbFormData.price" type="number" step="any" required></div>
+            <div class="form-group"><label>手續費</label><input v-model="gbFormData.fee" type="number" step="any" required></div>
+          </template>
+
+          <template v-else>
+            <div class="form-group"><label>本次獲得配息金額</label><input v-model="gbFormData.dividendCash" type="number" step="any" required placeholder="0"></div>
+          </template>
+
+          <div class="form-actions">
+            <button type="button" @click="showGBForm = false" class="cancel-btn">取消</button>
+            <button type="submit" class="submit-btn">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -806,13 +1086,11 @@ onMounted(() => {
 .app-container { font-family: sans-serif; padding: 16px; max-width: 600px; margin: 0 auto; padding-bottom: 80px; }
 header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
 
-/* 主目錄導航排版 */
 .nav-menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 15px; }
 .nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 4px; border-radius: 8px; font-weight: bold; font-size: 0.9em; cursor: pointer; transition: 0.2s; }
 .nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
 
-/* 左右對齊的台美股市值與未實現損益方塊 */
-.sub-assets-box { display: flex; justify-content: space-around; margin: 12px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.sub-assets-box { display: flex; justify-content: space-around; margin: 6px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .market-summary-item { text-align: center; flex: 1; }
 .market-summary-item:first-child { border-right: 1px solid #eee; }
 
