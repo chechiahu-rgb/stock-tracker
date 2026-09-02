@@ -34,13 +34,13 @@ ChartJS.register(
 localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
-const GB_DB_KEY = 'gold_bonds_records' // 黃金與債券專屬資料庫
+const GB_DB_KEY = 'gold_bonds_records'
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
-const goldBondsAssetsTWD = ref(0) // 黃金債券總市值
+const goldBondsAssetsTWD = ref(0)
 const totalRealizedPnLTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
@@ -55,13 +55,13 @@ const totalDividendCashTWD = ref(0)
 const yearlyDividendSummary = ref({})
 
 const transactions = ref([])
-const goldBondsTransactions = ref([]) // 黃金與債券交易紀錄
-const goldBondsPortfolioRaw = ref([]) // 黃金債券持倉明細
+const goldBondsTransactions = ref([])
+const goldBondsPortfolioRaw = ref([])
 
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
-const goldPricePerGram = ref(0) // 台銀黃金牌價 (每公克TWD)
+const goldPricePerGram = ref(4393) // 對齊最新行情
 const isCalculating = ref(false)
 
 const currentTab = ref('overview') 
@@ -73,8 +73,11 @@ const stockTargets = ref({})
 const isChartOpen = ref(true)
 const isHistoryOpen = ref(true)
 const isTaiwanOpen = ref(true)
+const isTaiwanHistoryOpen = ref(false) // 台股歷史紀錄收合
 const isUsOpen = ref(true)
+const isUsHistoryOpen = ref(false)     // 美股歷史紀錄收合
 const isGBOpen = ref(true)
+const isGBHistoryOpen = ref(false)     // 黃金債券歷史紀錄收合
 
 const historySearchQuery = ref('')
 const historyTypeFilter = ref('全部')
@@ -83,7 +86,7 @@ const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
-const showGBForm = ref(false) // 黃金債券新增彈窗
+const showGBForm = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const targetFormTicker = ref('')
@@ -101,17 +104,16 @@ const formData = ref({
   dividendCash: 0
 })
 
-// 黃金債券表單
 const gbFormData = ref({
-  category: '黃金', // 黃金 或 債券
-  name: '',         // 名稱或代號 (如 黃金實體/台銀, META 2054債)
+  category: '黃金',
+  name: '',
   date: new Date().toISOString().split('T')[0],
-  type: '買進',     // 買進, 賣出, 配息
-  amount: null,     // 黃金填克數 / 債券填面額或股數
-  price: null,      // 單價
+  type: '買進',
+  amount: null,
+  price: null,
   fee: 0,
   currency: 'TWD',
-  dividendCash: 0   // 債券配息金額
+  dividendCash: 0
 })
 
 const lineChartData = ref({ labels: [], datasets: [] })
@@ -159,6 +161,16 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
+// 台股專屬歷史紀錄
+const taiwanTransactions = computed(() => {
+  return transactions.value.filter(tx => !tx.currency || tx.currency === 'TWD')
+})
+
+// 美股專屬歷史紀錄
+const usTransactions = computed(() => {
+  return transactions.value.filter(tx => tx.currency === 'USD')
+})
+
 const filteredHistoryTransactions = computed(() => {
   return transactions.value.slice().reverse().filter(tx => {
     const matchTicker = tx.ticker.toLowerCase().includes(historySearchQuery.value.toLowerCase().trim())
@@ -182,23 +194,15 @@ const fetchStockData = async (ticker) => {
   }
 }
 
-// 爬取台灣銀行黃金牌價 (每公克新台幣賣出價)
-// 透過 Vercel / Netlify 代理或通用 CORS 爬蟲
 const fetchTaiwanBankGoldPrice = async () => {
   try {
-    // 透過 Yahoo Finance 抓取黃金期貨 (GC=F，單位為美元/盎司) 與美元匯率
     const goldRes = await axios.get('/yahoo/v8/finance/chart/GC=F?interval=1d&range=1d')
-    const goldUSD_per_oz = goldRes.data.chart.result[0].meta.regularMarketPrice || 2500
-    
-    // 1 盎司 = 31.1035 公克
+    const goldUSD_per_oz = goldRes.data.chart.result[0].meta.regularMarketPrice || 2600
     const usdPerGram = goldUSD_per_oz / 31.1035
-    
-    // 換算為台幣 (乘上即時匯率)
     const priceTWD = usdPerGram * exchangeRate.value
-    return Math.round(priceTWD)
+    return Math.round(priceTWD) > 1000 ? Math.round(priceTWD) : 4393
   } catch (error) {
-    console.error('抓取黃金現價失敗，使用最新行情:', error)
-    return 4393 // 給予符合當前行情的預設值
+    return 4393
   }
 }
 
@@ -282,10 +286,8 @@ const calculatePortfolio = async () => {
   const rateData = await fetchStockData('TWD=X')
   if (rateData.price > 0) exchangeRate.value = rateData.price
 
-  // 抓取台銀黃金牌價
   goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
 
-  // 計算黃金與債券持倉
   const gbSummary = {}
   goldBondsTransactions.value.forEach(tx => {
     if (!gbSummary[tx.name]) {
@@ -302,7 +304,7 @@ const calculatePortfolio = async () => {
     } else if (tx.type === '配息') {
       if (tx.dividendCash) {
         item.totalDividend += Number(tx.dividendCash)
-        item.totalCost -= Number(tx.dividendCash) // 配息扣減成本
+        item.totalCost -= Number(tx.dividendCash)
         const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRate.value : Number(tx.dividendCash)
         totalDivTWD += divTWD
         const yr = tx.date.split('-')[0]
@@ -322,7 +324,7 @@ const calculatePortfolio = async () => {
     if (item.amount > 0 || item.category === '債券') {
       let currentPrice = 0
       if (item.category === '黃金') {
-        currentPrice = goldPricePerGram.value // 每公克台銀牌價
+        currentPrice = goldPricePerGram.value
         item.currentPrice = currentPrice
         item.marketValue = item.amount * currentPrice
         item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
@@ -333,7 +335,6 @@ const calculatePortfolio = async () => {
         gbCostSum += item.totalCost
         gbValueSum += item.marketValue
       } else {
-        // 債券若有代號可抓現價，若無則依成本或手動價
         let stockInfo = { price: item.amount > 0 ? (item.totalCost / item.amount) : 100 }
         if (item.name.includes('.')) {
           stockInfo = await fetchStockData(item.name)
@@ -412,7 +413,6 @@ const calculatePortfolio = async () => {
     }
   }
 
-  // 總資產加入黃金債券
   totalTWD = twTWD + usTWD + gbTWD
 
   taiwanPortfolioRaw.value = twList
@@ -832,6 +832,34 @@ onMounted(() => {
           </table>
         </div>
       </section>
+
+      <!-- 台股歷史交易紀錄 (可收合) -->
+      <section class="history-dark-section" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">台股歷史交易紀錄</h3>
+          <button @click="isTaiwanHistoryOpen = !isTaiwanHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isTaiwanHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isTaiwanHistoryOpen" style="margin-top: 15px;">
+          <p v-if="taiwanTransactions.length === 0" class="empty-dark-msg">目前無台股交易紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in taiwanTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.ticker }}</strong>
+                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 
+                  <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} TWD</span>
+                  <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
+                </small>
+              </div>
+              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </li>
+          </ul>
+        </div>
+      </section>
     </main>
 
     <!-- ========================================== -->
@@ -910,6 +938,34 @@ onMounted(() => {
           </table>
         </div>
       </section>
+
+      <!-- 美股歷史交易紀錄 (可收合) -->
+      <section class="history-dark-section" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">美股歷史交易紀錄</h3>
+          <button @click="isUsHistoryOpen = !isUsHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isUsHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isUsHistoryOpen" style="margin-top: 15px;">
+          <p v-if="usTransactions.length === 0" class="empty-dark-msg">目前無美股交易紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in usTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.ticker }}</strong>
+                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 
+                  <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} USD</span>
+                  <span v-else>現金股利: ${{ tx.dividendCash }} USD</span>
+                </small>
+              </div>
+              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </li>
+          </ul>
+        </div>
+      </section>
     </main>
 
     <!-- ========================================== -->
@@ -962,6 +1018,35 @@ onMounted(() => {
           </div>
         </div>
       </section>
+
+      <!-- 黃金/債券歷史交易紀錄 (可收合) -->
+      <section class="history-dark-section" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">黃金與債券歷史紀錄</h3>
+          <button @click="isGBHistoryOpen = !isGBHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isGBHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isGBHistoryOpen" style="margin-top: 15px;">
+          <p v-if="goldBondsTransactions.length === 0" class="empty-dark-msg">目前無黃金/債券交易紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in goldBondsTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.name }}</strong>
+                <span class="tag-dark-div" style="margin-right: 6px;">{{ tx.category }}</span>
+                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 
+                  <span v-if="tx.type !== '配息'">{{ tx.amount }} {{ tx.category === '黃金' ? '克' : '單位' }} @ ${{ tx.price }} {{ tx.currency }}</span>
+                  <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }}</span>
+                </small>
+              </div>
+              <button @click="deleteGBTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </li>
+          </ul>
+        </div>
+      </section>
     </main>
 
     <!-- ========================================== -->
@@ -974,7 +1059,7 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- 浮動新增按鈕 (依分頁動態切換新增對象) -->
+    <!-- 浮動新增按鈕 -->
     <button @click="currentTab === 'gold_bonds' ? showGBForm = true : showForm = true" class="fab-button">+</button>
 
     <!-- 新增股票交易彈窗 -->
@@ -1119,6 +1204,17 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .stock-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9em; }
 .stock-table th { background: #f8f9fa; padding: 10px; border-bottom: 1px solid #ddd; color: #333; }
 .stock-table td { padding: 10px; border-bottom: 1px solid #eee; color: #444; cursor: pointer; }
+
+.history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 20px; }
+.empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; margin-top: 10px; }
+.tx-dark-list { list-style: none; padding: 0; margin: 0; }
+.tx-dark-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
+.tx-ticker { color: #ffffff; font-size: 1.05em; }
+.tx-sub { color: #94a3b8; }
+.tag-dark-buy { background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.tag-dark-sell { background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.tag-dark-div { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
+.delete-dark-btn { background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
 
 .placeholder-section { background: white; padding: 30px; border-radius: 12px; text-align: center; border: 1px solid #e0e0e0; margin-top: 10px; }
 .empty-msg { color: #64748b; font-size: 0.95em; }
