@@ -61,7 +61,7 @@ const goldBondsPortfolioRaw = ref([])
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
-const goldPricePerGram = ref(4393) // 對齊最新行情
+const goldPricePerGram = ref(4393)
 const isCalculating = ref(false)
 
 const currentTab = ref('overview') 
@@ -73,11 +73,11 @@ const stockTargets = ref({})
 const isChartOpen = ref(true)
 const isHistoryOpen = ref(true)
 const isTaiwanOpen = ref(true)
-const isTaiwanHistoryOpen = ref(false) // 台股歷史紀錄收合
+const isTaiwanHistoryOpen = ref(false)
 const isUsOpen = ref(true)
-const isUsHistoryOpen = ref(false)     // 美股歷史紀錄收合
+const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
-const isGBHistoryOpen = ref(false)     // 黃金債券歷史紀錄收合
+const isGBHistoryOpen = ref(false)
 
 const historySearchQuery = ref('')
 const historyTypeFilter = ref('全部')
@@ -111,6 +111,7 @@ const gbFormData = ref({
   type: '買進',
   amount: null,
   price: null,
+  marketValue: null, // 債券專選手動現價(總市值)
   fee: 0,
   currency: 'TWD',
   dividendCash: 0
@@ -161,12 +162,10 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
-// 台股專屬歷史紀錄
 const taiwanTransactions = computed(() => {
   return transactions.value.filter(tx => !tx.currency || tx.currency === 'TWD')
 })
 
-// 美股專屬歷史紀錄
 const usTransactions = computed(() => {
   return transactions.value.filter(tx => tx.currency === 'USD')
 })
@@ -288,7 +287,10 @@ const calculatePortfolio = async () => {
 
   goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
 
+  // 處理黃金與債券持倉
   const gbSummary = {}
+  const gbLatestMarketValue = {} // 紀錄債券最新手動填寫的現價總市值
+
   goldBondsTransactions.value.forEach(tx => {
     if (!gbSummary[tx.name]) {
       gbSummary[tx.name] = { category: tx.category, name: tx.name, amount: 0, totalCost: 0, currency: tx.currency, totalDividend: 0 }
@@ -297,10 +299,16 @@ const calculatePortfolio = async () => {
     if (tx.type === '買進') {
       item.amount += tx.amount
       item.totalCost += (tx.price * tx.amount) + tx.fee
+      if (item.category === '債券' && tx.marketValue) {
+        gbLatestMarketValue[tx.name] = Number(tx.marketValue)
+      }
     } else if (tx.type === '賣出' && item.amount > 0) {
       const avgCost = item.totalCost / item.amount
       item.amount -= tx.amount
       item.totalCost -= avgCost * tx.amount
+      if (item.category === '債券' && tx.marketValue) {
+        gbLatestMarketValue[tx.name] = Number(tx.marketValue)
+      }
     } else if (tx.type === '配息') {
       if (tx.dividendCash) {
         item.totalDividend += Number(tx.dividendCash)
@@ -310,6 +318,9 @@ const calculatePortfolio = async () => {
         const yr = tx.date.split('-')[0]
         if (!yearlyDivs[yr]) yearlyDivs[yr] = 0
         yearlyDivs[yr] += divTWD
+      }
+      if (tx.marketValue) {
+        gbLatestMarketValue[tx.name] = Number(tx.marketValue)
       }
     }
   })
@@ -322,11 +333,9 @@ const calculatePortfolio = async () => {
   for (const name in gbSummary) {
     const item = gbSummary[name]
     if (item.amount > 0 || item.category === '債券') {
-      let currentPrice = 0
       if (item.category === '黃金') {
-        currentPrice = goldPricePerGram.value
-        item.currentPrice = currentPrice
-        item.marketValue = item.amount * currentPrice
+        item.currentPrice = goldPricePerGram.value
+        item.marketValue = item.amount * item.currentPrice
         item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
         item.unrealizedPnL = item.marketValue - item.totalCost
         item.pnlPercent = item.totalCost > 0 ? (item.unrealizedPnL / item.totalCost) * 100 : 0
@@ -335,18 +344,14 @@ const calculatePortfolio = async () => {
         gbCostSum += item.totalCost
         gbValueSum += item.marketValue
       } else {
-        let stockInfo = { price: item.amount > 0 ? (item.totalCost / item.amount) : 100 }
-        if (item.name.includes('.')) {
-          stockInfo = await fetchStockData(item.name)
-        }
-        currentPrice = stockInfo.price > 0 ? stockInfo.price : (item.amount > 0 ? item.totalCost / item.amount : 100)
-        item.currentPrice = currentPrice
-        item.marketValue = item.amount * currentPrice
-        if (item.currency === 'USD') item.marketValue *= exchangeRate.value
-        
+        // 債券：使用手動填寫的現價總市值，若無則以成本當作現價
+        const manualVal = gbLatestMarketValue[item.name] !== undefined ? gbLatestMarketValue[item.name] : item.totalCost
+        item.marketValue = manualVal
+        item.currentPrice = item.amount > 0 ? manualVal / item.amount : manualVal
         item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
+
         const costTWD = item.currency === 'USD' ? item.totalCost * exchangeRate.value : item.totalCost
-        const valTWD = item.currency === 'USD' ? item.marketValue : item.marketValue
+        const valTWD = item.currency === 'USD' ? item.marketValue * exchangeRate.value : item.marketValue
         item.unrealizedPnL = valTWD - costTWD
         item.pnlPercent = costTWD > 0 ? (item.unrealizedPnL / costTWD) * 100 : 0
 
@@ -531,6 +536,7 @@ const saveGBTransaction = async () => {
     type: gbFormData.value.type,
     amount: Number(gbFormData.value.amount) || 0,
     price: Number(gbFormData.value.price) || 0,
+    marketValue: gbFormData.value.category === '債券' ? Number(gbFormData.value.marketValue) || 0 : 0,
     fee: Number(gbFormData.value.fee) || 0,
     currency: gbFormData.value.currency,
     dividendCash: Number(gbFormData.value.dividendCash) || 0
@@ -649,6 +655,7 @@ const resetGBForm = () => {
     type: '買進',
     amount: null,
     price: null,
+    marketValue: null,
     fee: 0,
     currency: 'TWD',
     dividendCash: 0
@@ -1006,8 +1013,7 @@ onMounted(() => {
                 <span>{{ item.amount.toLocaleString() }} {{ item.category === '黃金' ? '克' : '單位' }}</span>
               </div>
               <div class="card-body">
-                <p>現價：${{ item.currentPrice.toFixed(2) }} {{ item.category === '黃金' ? 'TWD/克' : item.currency }}</p>
-                <p>市值：${{ item.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} {{ item.category === '黃金' ? 'TWD' : item.currency }}</p>
+                <p>現價/市值：${{ item.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} {{ item.category === '黃金' ? 'TWD' : item.currency }}</p>
                 <p>成本均價：${{ item.avgCost.toFixed(2) }}</p>
                 <p v-if="item.totalDividend > 0">已領配息：${{ item.totalDividend.toLocaleString() }}</p>
                 <p :class="item.unrealizedPnL >= 0 ? 'profit' : 'loss'">
@@ -1038,8 +1044,8 @@ onMounted(() => {
                 <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
                 <br>
                 <small class="tx-sub">{{ tx.date }} | 
-                  <span v-if="tx.type !== '配息'">{{ tx.amount }} {{ tx.category === '黃金' ? '克' : '單位' }} @ ${{ tx.price }} {{ tx.currency }}</span>
-                  <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }}</span>
+                  <span v-if="tx.type !== '配息'">{{ tx.amount }} {{ tx.category === '黃金' ? '克' : '單位' }} @ ${{ tx.price }} {{ tx.currency }} <span v-if="tx.category==='債券'">| 現價總值: ${{ tx.marketValue }}</span></span>
+                  <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }} <span v-if="tx.marketValue">| 更新現價: ${{ tx.marketValue }}</span></span>
                 </small>
               </div>
               <button @click="deleteGBTransaction(tx.id)" class="delete-dark-btn">刪除</button>
@@ -1137,11 +1143,21 @@ onMounted(() => {
           <template v-if="gbFormData.type !== '配息'">
             <div class="form-group"><label>{{ gbFormData.category === '黃金' ? '克數' : '單位/股數' }}</label><input v-model="gbFormData.amount" type="number" step="any" required></div>
             <div class="form-group"><label>成交單價</label><input v-model="gbFormData.price" type="number" step="any" required></div>
+            <!-- 債券專屬：手動輸入當前現價總市值 -->
+            <div class="form-group" v-if="gbFormData.category === '債券'">
+              <label>當前現價總市值 (選填，更新總價)</label>
+              <input v-model="gbFormData.marketValue" type="number" step="any" placeholder="例如輸入當前總市值">
+            </div>
             <div class="form-group"><label>手續費</label><input v-model="gbFormData.fee" type="number" step="any" required></div>
           </template>
 
           <template v-else>
             <div class="form-group"><label>本次獲得配息金額</label><input v-model="gbFormData.dividendCash" type="number" step="any" required placeholder="0"></div>
+            <!-- 配息時也可順便更新現價總市值 -->
+            <div class="form-group" v-if="gbFormData.category === '債券'">
+              <label>更新當前現價總市值 (選填)</label>
+              <input v-model="gbFormData.marketValue" type="number" step="any" placeholder="更新目前總市值">
+            </div>
           </template>
 
           <div class="form-actions">
