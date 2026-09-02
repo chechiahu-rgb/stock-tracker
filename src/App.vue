@@ -55,10 +55,7 @@ const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
 
-// 根目錄與子目錄切換：預設為總覽 (overview)
-// 可選值: 'overview', 'TW', 'US', 'funds', 'gold_bonds', 'bank'
 const currentTab = ref('overview') 
-
 const viewMode = ref('card')
 const sortOption = ref('value')
 
@@ -69,7 +66,6 @@ const isHistoryOpen = ref(true)
 const isTaiwanOpen = ref(true)
 const isUsOpen = ref(true)
 
-// 歷史紀錄篩選條件
 const historySearchQuery = ref('')
 const historyTypeFilter = ref('全部')
 
@@ -501,7 +497,7 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 主導航目錄選單 (根目錄與子目錄切換) -->
+      <!-- 主導航目錄選單 -->
       <div class="nav-menu-grid">
         <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽首頁</button>
         <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
@@ -525,12 +521,27 @@ onMounted(() => {
     <!-- 1. 總覽首頁內容 (overview) -->
     <!-- ========================================== -->
     <div v-if="currentTab === 'overview'">
+      <!-- 左右對齊的台美股市值與未實現損益方塊 -->
       <div class="sub-assets-box">
         <div class="market-summary-item">
           <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+          <br>
+          <small>未實現：
+            <strong :class="taiwanUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ taiwanUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} 
+              ({{ taiwanTotalCost > 0 ? ((taiwanUnrealizedPnL / taiwanTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
         </div>
         <div class="market-summary-item">
           <span>美股市值：${{ usAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+          <br>
+          <small>未實現：
+            <strong :class="usUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ usUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
+              ({{ usTotalCost > 0 ? ((usUnrealizedPnL / usTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
         </div>
       </div>
 
@@ -715,7 +726,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 4. 基金子目錄 (funds) - 暫時預留空白 -->
+    <!-- 4. 基金子目錄 (funds) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'funds'">
       <section class="placeholder-section">
@@ -725,7 +736,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 5. 黃金/債券子目錄 (gold_bonds) - 暫時預留空白 -->
+    <!-- 5. 黃金/債券子目錄 (gold_bonds) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'gold_bonds'">
       <section class="placeholder-section">
@@ -735,7 +746,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 6. 銀行帳戶子目錄 (bank) - 暫時預留空白 -->
+    <!-- 6. 銀行帳戶子目錄 (bank) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'bank'">
       <section class="placeholder-section">
@@ -800,8 +811,10 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 4px; border-radius: 8px; font-weight: bold; font-size: 0.9em; cursor: pointer; transition: 0.2s; }
 .nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
 
+/* 左右對齊的台美股市值與未實現損益方塊 */
 .sub-assets-box { display: flex; justify-content: space-around; margin: 12px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .market-summary-item { text-align: center; flex: 1; }
+.market-summary-item:first-child { border-right: 1px solid #eee; }
 
 .backup-toolbar { display: flex; gap: 10px; justify-content: center; }
 .backup-btn { background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
