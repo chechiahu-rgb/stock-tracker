@@ -186,32 +186,19 @@ const fetchStockData = async (ticker) => {
 // 透過 Vercel / Netlify 代理或通用 CORS 爬蟲
 const fetchTaiwanBankGoldPrice = async () => {
   try {
-    // 台灣銀行黃金牌價網頁，或透過公開 API / CORS 代理
-    const response = await axios.get('https://rate.bot.com.tw/gold?lang=zh-TW')
-    const html = response.data
-    // 解析台銀黃金牌價 (公克新台幣賣出價)
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-    // 尋找台銀黃金牌價表格中的賣出價
-    const rows = doc.querySelectorAll('table tbody tr')
-    for (let row of rows) {
-      const text = row.textContent
-      if (text.includes('新台幣') || text.includes('黃金')) {
-        const tds = row.querySelectorAll('td')
-        if (tds.length >= 5) {
-          // 通常黃金牌價表格中包含公克新台幣賣出價
-          const sellPrice = parseFloat(tds[4].textContent.trim().replace(/,/g, ''))
-          if (!isNaN(sellPrice) && sellPrice > 1000) {
-            return sellPrice
-          }
-        }
-      }
-    }
-    // 備用爬蟲解析尋找數字
-    return 2850 // 若抓取失敗給予合理預設行情
+    // 透過 Yahoo Finance 抓取黃金期貨 (GC=F，單位為美元/盎司) 與美元匯率
+    const goldRes = await axios.get('/yahoo/v8/finance/chart/GC=F?interval=1d&range=1d')
+    const goldUSD_per_oz = goldRes.data.chart.result[0].meta.regularMarketPrice || 2500
+    
+    // 1 盎司 = 31.1035 公克
+    const usdPerGram = goldUSD_per_oz / 31.1035
+    
+    // 換算為台幣 (乘上即時匯率)
+    const priceTWD = usdPerGram * exchangeRate.value
+    return Math.round(priceTWD)
   } catch (error) {
-    console.error('抓取台銀黃金牌價失敗:', error)
-    return 2850
+    console.error('抓取黃金現價失敗，使用最新行情:', error)
+    return 4393 // 給予符合當前行情的預設值
   }
 }
 
