@@ -54,7 +54,11 @@ const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
 const exchangeRate = ref(32.5)
 const isCalculating = ref(false)
-const currentTab = ref('TW')
+
+// 根目錄與子目錄切換：預設為總覽 (overview)
+// 可選值: 'overview', 'TW', 'US', 'funds', 'gold_bonds', 'bank'
+const currentTab = ref('overview') 
+
 const viewMode = ref('card')
 const sortOption = ref('value')
 
@@ -62,8 +66,8 @@ const stockTargets = ref({})
 
 const isChartOpen = ref(true)
 const isHistoryOpen = ref(true)
-const isTaiwanOpen = ref(true) // 台股庫存收合狀態
-const isUsOpen = ref(true)     // 美股庫存收合狀態
+const isTaiwanOpen = ref(true)
+const isUsOpen = ref(true)
 
 // 歷史紀錄篩選條件
 const historySearchQuery = ref('')
@@ -135,7 +139,6 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
-// 歷史紀錄篩選計算屬性
 const filteredHistoryTransactions = computed(() => {
   return transactions.value.slice().reverse().filter(tx => {
     const matchTicker = tx.ticker.toLowerCase().includes(historySearchQuery.value.toLowerCase().trim())
@@ -304,7 +307,6 @@ const calculatePortfolio = async () => {
   const dataValues = Object.values(dailyAssetHistory)
   const todayStr = new Date().toISOString().split('T')[0]
   
-  // 修正：確保最後一天（或今天）強制帶入最新的真實總市值 (Market Value)
   if (labels.includes(todayStr)) {
     const todayIndex = labels.indexOf(todayStr)
     dataValues[todayIndex] = totalTWD
@@ -499,279 +501,246 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <div class="sub-assets-box">
-        <div class="market-summary-item">
-          <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
-          <br>
-          <small>未實現：
-            <strong :class="taiwanUnrealizedPnL >= 0 ? 'profit' : 'loss'">
-              ${{ taiwanUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} 
-              ({{ taiwanTotalCost > 0 ? ((taiwanUnrealizedPnL / taiwanTotalCost) * 100).toFixed(2) : 0 }}%)
-            </strong>
-          </small>
-        </div>
-        <div class="market-summary-item">
-          <span>美股市值：${{ usAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
-          <br>
-          <small>未實現：
-            <strong :class="usUnrealizedPnL >= 0 ? 'profit' : 'loss'">
-              ${{ usUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
-              ({{ usTotalCost > 0 ? ((usUnrealizedPnL / usTotalCost) * 100).toFixed(2) : 0 }}%)
-            </strong>
-          </small>
-        </div>
+      <!-- 主導航目錄選單 (根目錄與子目錄切換) -->
+      <div class="nav-menu-grid">
+        <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽首頁</button>
+        <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
+        <button :class="['nav-btn', currentTab === 'US' ? 'active-nav' : '']" @click="currentTab = 'US'">📉 美股</button>
+        <button :class="['nav-btn', currentTab === 'funds' ? 'active-nav' : '']" @click="currentTab = 'funds'">🌐 基金</button>
+        <button :class="['nav-btn', currentTab === 'gold_bonds' ? 'active-nav' : '']" @click="currentTab = 'gold_bonds'">🥇 黃金/債券</button>
+        <button :class="['nav-btn', currentTab === 'bank' ? 'active-nav' : '']" @click="currentTab = 'bank'">🏦 銀行帳戶</button>
       </div>
 
-      <div class="dividend-summary-box">
-        <p><strong>總累積現金股利：</strong> <span class="div-highlight">${{ totalDividendCashTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
-        <div class="yearly-div-list" v-if="Object.keys(yearlyDividendSummary).length > 0">
-          <small v-for="(val, yr) in yearlyDividendSummary" :key="yr" class="yearly-tag">
-            {{ yr }}年: ${{ val.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
-          </small>
-        </div>
-      </div>
-
-      <div class="backup-toolbar">
-        <button @click="exportBackup" class="backup-btn">📤 匯出備份 (JSON)</button>
+      <!-- 快捷工具列 (備份還原) -->
+      <div class="backup-toolbar" style="margin-top: 15px;">
+        <button @click="exportBackup" class="backup-btn">📤 匯出備份</button>
         <label class="backup-btn import-btn">
           📥 匯入還原
           <input type="file" accept=".json" @change="importBackup" style="display: none;">
         </label>
       </div>
-
-      <div class="realized-pnl-box">
-        <span>總已實現損益：</span>
-        <strong :class="totalRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
-          ${{ totalRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD
-        </strong>
-      </div>
-      <div><small>匯率 USD/TWD: {{ exchangeRate.toFixed(2) }}</small></div>
     </header>
 
-    <!-- 圖表區塊 -->
-    <section class="chart-section">
-      <div class="chart-header-row">
-        <div class="chart-type-selector">
-          <button :class="['type-btn', chartType === 'line' ? 'active-type' : '']" @click="chartType = 'line'">資產折線圖</button>
-          <button :class="['type-btn', chartType === 'bar' ? 'active-type' : '']" @click="chartType = 'bar'">個股市值長條圖</button>
+    <!-- ========================================== -->
+    <!-- 1. 總覽首頁內容 (overview) -->
+    <!-- ========================================== -->
+    <div v-if="currentTab === 'overview'">
+      <div class="sub-assets-box">
+        <div class="market-summary-item">
+          <span>台股市值：${{ taiwanAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
         </div>
-        <button @click="isChartOpen = !isChartOpen" class="toggle-chart-btn">
-          {{ isChartOpen ? '收起 🔼' : '展開 🔽' }}
-        </button>
+        <div class="market-summary-item">
+          <span>美股市值：${{ usAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+        </div>
       </div>
 
-      <div v-if="chartType === 'bar' && isChartOpen" class="bar-market-selector">
-        <button :class="['bar-sub-btn', barMarketTab === 'TW' ? 'active-sub' : '']" @click="barMarketTab = 'TW'; updateBarChartData()">台股前五大</button>
-        <button :class="['bar-sub-btn', barMarketTab === 'US' ? 'active-sub' : '']" @click="barMarketTab = 'US'; updateBarChartData()">美股前五大</button>
-      </div>
-
-      <div class="chart-container" v-show="isChartOpen">
-        <Line v-if="chartType === 'line'" :data="lineChartData" :options="lineChartOptions" />
-        <Bar v-else :data="barChartData" :options="barChartOptions" />
-      </div>
-    </section>
-
-    <!-- 市場切換標籤 -->
-    <div class="tab-container">
-      <button :class="['tab-btn', currentTab === 'TW' ? 'active' : '']" @click="currentTab = 'TW'">台股市場</button>
-      <button :class="['tab-btn', currentTab === 'US' ? 'active' : '']" @click="currentTab = 'US'">美股市場</button>
-    </div>
-
-    <!-- 控制列 -->
-    <div class="control-bar">
-      <div class="sort-group">
-        <span>排序：</span>
-        <select v-model="sortOption" class="sort-select">
-          <option value="value">依資產市值</option>
-          <option value="ticker">依股票代號</option>
-          <option value="shares">依持股股數</option>
-        </select>
-      </div>
-      <div class="view-mode-group">
-        <span>顯示：</span>
-        <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片</button>
-        <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">列表</button>
-      </div>
-    </div>
-
-    <main>
-      <!-- 台股市場區塊 (附帶收合功能) -->
-      <section v-if="currentTab === 'TW'" class="portfolio">
-        <div class="chart-header-row" style="margin-bottom: 12px;">
-          <h3 style="margin: 0;">台股持股庫存</h3>
-          <button @click="isTaiwanOpen = !isTaiwanOpen" class="toggle-chart-btn">
-            {{ isTaiwanOpen ? '收起 🔼' : '展開 🔽' }}
+      <!-- 圖表區塊 -->
+      <section class="chart-section">
+        <div class="chart-header-row">
+          <div class="chart-type-selector">
+            <button :class="['type-btn', chartType === 'line' ? 'active-type' : '']" @click="chartType = 'line'">資產折線圖</button>
+            <button :class="['type-btn', chartType === 'bar' ? 'active-type' : '']" @click="chartType = 'bar'">市值長條圖</button>
+          </div>
+          <button @click="isChartOpen = !isChartOpen" class="toggle-chart-btn">
+            {{ isChartOpen ? '收起 🔼' : '展開 🔽' }}
           </button>
         </div>
 
-        <div v-show="isTaiwanOpen">
-          <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
-          
-          <div v-else-if="viewMode === 'card'" class="card-grid">
-            <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
-              <div class="card-header" @click="selectedTickerModal = stock.ticker">
-                <div>
-                  <strong class="stock-name">{{ stock.name }}</strong> 
-                  <span class="stock-ticker">({{ stock.ticker }})</span>
-                </div>
-                <span>{{ stock.shares.toLocaleString() }} 股</span>
-              </div>
-              <div class="card-body" @click="selectedTickerModal = stock.ticker">
-                <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
-                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
-                <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
-                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
-                </p>
-                <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
-                  <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
-                  <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
-                </div>
-              </div>
-              <div class="card-footer-action">
-                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-              </div>
-            </div>
-          </div>
+        <div v-if="chartType === 'bar' && isChartOpen" class="bar-market-selector">
+          <button :class="['bar-sub-btn', barMarketTab === 'TW' ? 'active-sub' : '']" @click="barMarketTab = 'TW'; updateBarChartData()">台股前五大</button>
+          <button :class="['bar-sub-btn', barMarketTab === 'US' ? 'active-sub' : '']" @click="barMarketTab = 'US'; updateBarChartData()">美股前五大</button>
+        </div>
 
-          <div v-else class="table-container">
-            <table class="stock-table">
-              <thead>
-                <tr>
-                  <th>標的</th>
-                  <th>股數</th>
-                  <th>現價 / 市值</th>
-                  <th>均價</th>
-                  <th>未實現損益</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
-                  <td @click="selectedTickerModal = stock.ticker">
-                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                  </td>
-                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                  <td @click="selectedTickerModal = stock.ticker">
-                    ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                  </td>
-                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div class="chart-container" v-show="isChartOpen">
+          <Line v-if="chartType === 'line'" :data="lineChartData" :options="lineChartOptions" />
+          <Bar v-else :data="barChartData" :options="barChartOptions" />
         </div>
       </section>
+    </div>
 
-      <!-- 美股市場區塊 (附帶收合功能) -->
-      <section v-if="currentTab === 'US'" class="portfolio">
-        <div class="chart-header-row" style="margin-bottom: 12px;">
-          <h3 style="margin: 0;">美股持股庫存</h3>
-          <button @click="isUsOpen = !isUsOpen" class="toggle-chart-btn">
-            {{ isUsOpen ? '收起 🔼' : '展開 🔽' }}
-          </button>
+    <!-- ========================================== -->
+    <!-- 2. 台股子目錄 (TW) -->
+    <!-- ========================================== -->
+    <main v-if="currentTab === 'TW'">
+      <div class="control-bar">
+        <div class="sort-group">
+          <span>排序：</span>
+          <select v-model="sortOption" class="sort-select">
+            <option value="value">依資產市值</option>
+            <option value="ticker">依股票代號</option>
+            <option value="shares">依持股股數</option>
+          </select>
         </div>
-
-        <div v-show="isUsOpen">
-          <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
-          
-          <div v-else-if="viewMode === 'card'" class="card-grid">
-            <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
-              <div class="card-header" @click="selectedTickerModal = stock.ticker">
-                <div>
-                  <strong class="stock-name">{{ stock.name }}</strong> 
-                  <span class="stock-ticker">({{ stock.ticker }})</span>
-                </div>
-                <span>{{ stock.shares.toLocaleString() }} 股</span>
-              </div>
-              <div class="card-body" @click="selectedTickerModal = stock.ticker">
-                <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
-                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
-                <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
-                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
-                </p>
-                <div v-if="stock.targetPrice || stock.stopPrice" class="target-alert-box">
-                  <span v-if="stock.targetPrice && stock.currentPrice >= stock.targetPrice" class="alert-badge target-hit">🎯 已達目標價 ${{ stock.targetPrice }}</span>
-                  <span v-if="stock.stopPrice && stock.currentPrice <= stock.stopPrice" class="alert-badge stop-hit">⚠️ 跌破停損線 ${{ stock.stopPrice }}</span>
-                </div>
-              </div>
-              <div class="card-footer-action">
-                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="table-container">
-            <table class="stock-table">
-              <thead>
-                <tr>
-                  <th>標的</th>
-                  <th>股數</th>
-                  <th>現價 / 市值</th>
-                  <th>均價</th>
-                  <th>未實現損益</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="stock in usPortfolio" :key="stock.ticker">
-                  <td @click="selectedTickerModal = stock.ticker">
-                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                  </td>
-                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                  <td @click="selectedTickerModal = stock.ticker">
-                    ${{ stock.currentPrice.toFixed(2) }}<br><small style="color: #666;">市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                  </td>
-                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div class="view-mode-group">
+          <span>顯示：</span>
+          <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片</button>
+          <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">列表</button>
         </div>
-      </section>
+      </div>
 
-      <!-- 全部歷史交易紀錄 (暗色系風格 - 附帶收合與智慧搜尋篩選功能) -->
-      <section class="history-dark-section">
-        <div class="chart-header-row" style="margin-bottom: 0;">
-          <h3 style="margin: 0; border: none; padding: 0;">全部歷史交易紀錄</h3>
-          <button @click="isHistoryOpen = !isHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
-            {{ isHistoryOpen ? '收起 🔼' : '展開 🔽' }}
-          </button>
-        </div>
+      <section class="portfolio">
+        <h3>台股持股庫存</h3>
+        <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
         
-        <div v-show="isHistoryOpen" style="margin-top: 15px;">
-          <!-- 搜尋與篩選工具列 -->
-          <div class="history-filter-bar">
-            <input v-model="historySearchQuery" type="text" placeholder="搜尋代號 (如 2330)..." class="history-search-input">
-            <select v-model="historyTypeFilter" class="history-type-select">
-              <option value="全部">全部類型</option>
-              <option value="買進">買進</option>
-              <option value="賣出">賣出</option>
-              <option value="配息">配息</option>
-            </select>
-          </div>
-
-          <p v-if="filteredHistoryTransactions.length === 0" class="empty-dark-msg">找不到符合條件的交易紀錄。</p>
-          <ul v-else class="tx-dark-list">
-            <li v-for="tx in filteredHistoryTransactions" :key="tx.id" class="tx-dark-item">
-              <div class="tx-info">
-                <strong class="tx-ticker">{{ tx.ticker }}</strong>
-                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
-                <br>
-                <small class="tx-sub">{{ tx.date }} | 
-                  <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }} {{ tx.currency }}</span>
-                  <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
-                </small>
+        <div v-else-if="viewMode === 'card'" class="card-grid">
+          <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
+            <div class="card-header" @click="selectedTickerModal = stock.ticker">
+              <div>
+                <strong class="stock-name">{{ stock.name }}</strong> 
+                <span class="stock-ticker">({{ stock.ticker }})</span>
               </div>
-              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
-            </li>
-          </ul>
+              <span>{{ stock.shares.toLocaleString() }} 股</span>
+            </div>
+            <div class="card-body" @click="selectedTickerModal = stock.ticker">
+              <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
+              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
+              <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
+              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
+              </p>
+            </div>
+            <div class="card-footer-action">
+              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+            </div>
+          </div>
         </div>
+
+        <div v-else class="table-container">
+          <table class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>股數</th>
+                <th>現價 / 市值</th>
+                <th>均價</th>
+                <th>未實現損益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
+                <td @click="selectedTickerModal = stock.ticker">
+                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                </td>
+                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                <td @click="selectedTickerModal = stock.ticker">
+                  ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                </td>
+                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- ========================================== -->
+    <!-- 3. 美股子目錄 (US) -->
+    <!-- ========================================== -->
+    <main v-if="currentTab === 'US'">
+      <div class="control-bar">
+        <div class="sort-group">
+          <span>排序：</span>
+          <select v-model="sortOption" class="sort-select">
+            <option value="value">依資產市值</option>
+            <option value="ticker">依股票代號</option>
+            <option value="shares">依持股股數</option>
+          </select>
+        </div>
+        <div class="view-mode-group">
+          <span>顯示：</span>
+          <button :class="['mode-btn', viewMode === 'card' ? 'active-mode' : '']" @click="viewMode = 'card'">卡片</button>
+          <button :class="['mode-btn', viewMode === 'list' ? 'active-mode' : '']" @click="viewMode = 'list'">列表</button>
+        </div>
+      </div>
+
+      <section class="portfolio">
+        <h3>美股持股庫存</h3>
+        <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
+        
+        <div v-else-if="viewMode === 'card'" class="card-grid">
+          <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
+            <div class="card-header" @click="selectedTickerModal = stock.ticker">
+              <div>
+                <strong class="stock-name">{{ stock.name }}</strong> 
+                <span class="stock-ticker">({{ stock.ticker }})</span>
+              </div>
+              <span>{{ stock.shares.toLocaleString() }} 股</span>
+            </div>
+            <div class="card-body" @click="selectedTickerModal = stock.ticker">
+              <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
+              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
+              <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
+              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
+              </p>
+            </div>
+            <div class="card-footer-action">
+              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="table-container">
+          <table class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>股數</th>
+                <th>現價 / 市值</th>
+                <th>均價</th>
+                <th>未實現損益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in usPortfolio" :key="stock.ticker">
+                <td @click="selectedTickerModal = stock.ticker">
+                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                </td>
+                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                <td @click="selectedTickerModal = stock.ticker">
+                  ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                </td>
+                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- ========================================== -->
+    <!-- 4. 基金子目錄 (funds) - 暫時預留空白 -->
+    <!-- ========================================== -->
+    <main v-if="currentTab === 'funds'">
+      <section class="placeholder-section">
+        <h3>🌐 基金資產管理</h3>
+        <p class="empty-msg">此子目錄建置中，稍待將新增基金相關追蹤功能。</p>
+      </section>
+    </main>
+
+    <!-- ========================================== -->
+    <!-- 5. 黃金/債券子目錄 (gold_bonds) - 暫時預留空白 -->
+    <!-- ========================================== -->
+    <main v-if="currentTab === 'gold_bonds'">
+      <section class="placeholder-section">
+        <h3>🥇 黃金與債券管理</h3>
+        <p class="empty-msg">此子目錄建置中，稍待將新增黃金與債券相關追蹤功能。</p>
+      </section>
+    </main>
+
+    <!-- ========================================== -->
+    <!-- 6. 銀行帳戶子目錄 (bank) - 暫時預留空白 -->
+    <!-- ========================================== -->
+    <main v-if="currentTab === 'bank'">
+      <section class="placeholder-section">
+        <h3>🏦 銀行台幣/外幣活存定存</h3>
+        <p class="empty-msg">此子目錄建置中，稍待將新增銀行帳戶與定存追蹤功能。</p>
       </section>
     </main>
 
@@ -819,41 +788,6 @@ onMounted(() => {
         </form>
       </div>
     </div>
-
-    <!-- 設定目標價與停損線彈窗 -->
-    <div v-if="showTargetModal" class="modal-overlay" @click.self="showTargetModal = false">
-      <div class="modal-content">
-        <h3>設定 {{ targetFormTicker }} 價格提示</h3>
-        <form @submit.prevent="saveTargetSetting">
-          <div class="form-group"><label>目標價 (達標提示)</label><input v-model="targetFormVal.targetPrice" type="number" step="any" placeholder="例如 1000"></div>
-          <div class="form-group"><label>停損 / 成本警戒線 (跌破警告)</label><input v-model="targetFormVal.stopPrice" type="number" step="any" placeholder="例如 500"></div>
-          <div class="form-actions">
-            <button type="button" @click="showTargetModal = false" class="cancel-btn">取消</button>
-            <button type="submit" class="submit-btn">儲存</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- 個股歷史紀錄專屬彈窗 -->
-    <div v-if="selectedTickerModal" class="modal-overlay" @click.self="selectedTickerModal = null">
-      <div class="modal-content">
-        <h3>{{ selectedTickerModal }} 歷史紀錄</h3>
-        <ul class="tx-dark-list" style="margin-top: 15px;">
-          <li v-for="tx in filteredTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
-            <div class="tx-info">
-              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
-              <small class="tx-sub">{{ tx.date }} | 
-                <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }}</span>
-                <span v-else>配股: {{ tx.dividendShares }}股 / 現金: ${{ tx.dividendCash }}</span>
-              </small>
-            </div>
-            <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
-          </li>
-        </ul>
-        <button @click="selectedTickerModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -861,21 +795,18 @@ onMounted(() => {
 .app-container { font-family: sans-serif; padding: 16px; max-width: 600px; margin: 0 auto; padding-bottom: 80px; }
 header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
 
-.sub-assets-box { display: flex; justify-content: space-around; margin: 12px 0; font-size: 0.95em; color: #333; background: #fff; padding: 10px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+/* 主目錄導航排版 */
+.nav-menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 15px; }
+.nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 4px; border-radius: 8px; font-weight: bold; font-size: 0.9em; cursor: pointer; transition: 0.2s; }
+.nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
+
+.sub-assets-box { display: flex; justify-content: space-around; margin: 12px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .market-summary-item { text-align: center; flex: 1; }
-.market-summary-item:first-child { border-right: 1px solid #eee; }
 
-.dividend-summary-box { background: #fff; padding: 8px 12px; border-radius: 8px; margin: 8px 0; font-size: 0.9em; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: left; }
-.div-highlight { color: #0284c7; font-weight: bold; }
-.yearly-div-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.yearly-tag { background: #f0f9ff; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; border: 1px solid #bae6fd; }
-
-.backup-toolbar { display: flex; gap: 10px; margin: 10px 0; }
-.backup-btn { flex: 1; background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
+.backup-toolbar { display: flex; gap: 10px; justify-content: center; }
+.backup-btn { background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
 .backup-btn:hover { background: #f1f5f9; }
 .import-btn { display: flex; align-items: center; justify-content: center; }
-
-.realized-pnl-box { margin: 8px 0; font-size: 1em; color: #333; background: #fff; padding: 6px 12px; border-radius: 6px; display: inline-block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
 .chart-section { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
 .chart-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
@@ -888,12 +819,7 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .bar-sub-btn.active-sub { background: #3b82f6; color: white; }
 
 .toggle-chart-btn { background: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
-.toggle-chart-btn:hover { background: #e2e8f0; }
 .chart-container { position: relative; height: 240px; width: 100%; margin-top: 10px; }
-
-.tab-container { display: flex; margin-bottom: 10px; background: #e5e5ea; border-radius: 8px; padding: 4px; }
-.tab-btn { flex: 1; padding: 10px; border: none; background: transparent; font-size: 16px; font-weight: bold; color: #666; cursor: pointer; border-radius: 6px; transition: 0.2s; }
-.tab-btn.active { background: white; color: #007aff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
 
 .control-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; font-size: 0.9em; color: #555; background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e0e0e0; }
 .sort-group { display: flex; align-items: center; }
@@ -903,42 +829,21 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .mode-btn.active-mode { background: #007aff; color: white; border-color: #007aff; }
 
 .card-grid { display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 20px; }
-.stock-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); transition: transform 0.1s; }
+.stock-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
 .card-header { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.1em; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; cursor: pointer; }
 .stock-name { font-size: 1.1em; color: #111; margin-right: 6px; }
 .stock-ticker { font-size: 0.85em; color: #666; }
-.card-body { cursor: pointer; }
 .card-body p { margin: 5px 0; font-size: 0.95em; color: #555; }
-
-.target-alert-box { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.alert-badge { font-size: 0.8em; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
-.target-hit { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
-.stop-hit { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
-
 .card-footer-action { margin-top: 10px; border-top: 1px dashed #eee; padding-top: 8px; text-align: right; }
 .target-setting-btn { background: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; }
-.target-setting-btn:hover { background: #e2e8f0; }
 
 .table-container { background: white; border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0; margin-bottom: 20px; }
 .stock-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9em; }
 .stock-table th { background: #f8f9fa; padding: 10px; border-bottom: 1px solid #ddd; color: #333; }
 .stock-table td { padding: 10px; border-bottom: 1px solid #eee; color: #444; cursor: pointer; }
-.stock-table tr:hover { background: #f1f5f9; }
 
-.history-dark-section { background: #1e293b; color: #f8fafc; padding: 20px; border-radius: 12px; margin-top: 30px; }
-.history-filter-bar { display: flex; gap: 8px; margin-top: 12px; margin-bottom: 12px; }
-.history-search-input { flex: 2; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; }
-.history-type-select { flex: 1; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; }
-
-.empty-dark-msg { color: #94a3b8; text-align: center; font-size: 0.9em; margin-top: 10px; }
-.tx-dark-list { list-style: none; padding: 0; margin: 0; }
-.tx-dark-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 8px; border-radius: 8px; }
-.tx-ticker { color: #ffffff; font-size: 1.05em; }
-.tx-sub { color: #94a3b8; }
-.tag-dark-buy { background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
-.tag-dark-sell { background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
-.tag-dark-div { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
-.delete-dark-btn { background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+.placeholder-section { background: white; padding: 30px; border-radius: 12px; text-align: center; border: 1px solid #e0e0e0; margin-top: 10px; }
+.empty-msg { color: #64748b; font-size: 0.95em; }
 
 .profit { color: #d32f2f !important; font-weight: bold; }
 .loss { color: #388e3c !important; font-weight: bold; }
