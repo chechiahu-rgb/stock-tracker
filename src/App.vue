@@ -303,7 +303,12 @@ const calculatePortfolio = async () => {
   const labels = Object.keys(dailyAssetHistory)
   const dataValues = Object.values(dailyAssetHistory)
   const todayStr = new Date().toISOString().split('T')[0]
-  if (!labels.includes(todayStr) && totalTWD > 0) {
+  
+  // 修正：確保最後一天（或今天）強制帶入最新的真實總市值 (Market Value)
+  if (labels.includes(todayStr)) {
+    const todayIndex = labels.indexOf(todayStr)
+    dataValues[todayIndex] = totalTWD
+  } else if (totalTWD > 0) {
     labels.push(todayStr)
     dataValues.push(totalTWD)
   }
@@ -311,7 +316,7 @@ const calculatePortfolio = async () => {
   lineChartData.value = {
     labels: labels,
     datasets: [{
-      label: '總資產走勢 (TWD)',
+      label: '總資產市值走勢 (TWD)',
       backgroundColor: 'rgba(0, 122, 255, 0.1)',
       borderColor: '#007aff',
       borderWidth: 2,
