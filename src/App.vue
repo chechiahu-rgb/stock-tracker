@@ -35,12 +35,14 @@ localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
 const GB_DB_KEY = 'gold_bonds_records'
+const BANK_DB_KEY = 'bank_records'
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
 const goldBondsAssetsTWD = ref(0)
+const bankAssetsTWD = ref(0)
 const totalRealizedPnLTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
@@ -57,13 +59,27 @@ const taiwanYearlyDividendSummary = ref({})
 const usTotalDividendTWD = ref(0)
 const usYearlyDividendSummary = ref({})
 
+// 銀行資產與匯率
+const bankTransactions = ref([])
+const bankPortfolioRaw = ref([])
+const bankCurrenciesSummary = ref({})
+
+const exchangeRates = ref({
+  TWD: 1,
+  USD: 32.5,
+  JPY: 0.21,
+  AUD: 21.5,
+  EUR: 35.0,
+  KRW: 0.024
+})
+
 const transactions = ref([])
 const goldBondsTransactions = ref([])
 const goldBondsPortfolioRaw = ref([])
 
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
-const exchangeRate = ref(32.5)
+const exchangeRate = ref(32.5) // 保留原本供美股換算使用
 const goldPricePerGram = ref(4393)
 const isCalculating = ref(false)
 
@@ -80,12 +96,15 @@ const isUsOpen = ref(true)
 const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
+const isBankOpen = ref(true)
+const isBankHistoryOpen = ref(false)
 
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
 const showGBForm = ref(false)
+const showBankForm = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const targetFormTicker = ref('')
@@ -117,6 +136,14 @@ const gbFormData = ref({
   fee: 0,
   currency: 'TWD',
   dividendCash: 0
+})
+
+const bankFormData = ref({
+  bankName: '',
+  accountType: '活存',
+  currency: 'TWD',
+  balance: null,
+  date: new Date().toISOString().split('T')[0]
 })
 
 const lineChartData = ref({ labels: [], datasets: [] })
@@ -187,6 +214,41 @@ const fetchStockData = async (ticker) => {
   }
 }
 
+// 自動爬蟲外幣匯率
+const fetchExchangeRates = async () => {
+  try {
+    const usdtwd = await fetchStockData('TWD=X')
+    if (usdtwd.price > 0) {
+      exchangeRates.value.USD = usdtwd.price
+      exchangeRate.value = usdtwd.price
+    }
+
+    // 透過交叉匯率或 Yahoo Finance 抓取其他幣別相對於美元或台幣
+    // JPY (USDJPY=X) -> JPY per USD => TWD per JPY = (TWD=X) / (USDJPY=X)
+    const usdjpy = await fetchStockData('USDJPY=X')
+    if (usdjpy.price > 0 && exchangeRates.value.USD) {
+      exchangeRates.value.JPY = exchangeRates.value.USD / usdjpy.price
+    }
+
+    const audusd = await fetchStockData('AUDUSD=X')
+    if (audusd.price > 0 && exchangeRates.value.USD) {
+      exchangeRates.value.AUD = audusd.price * exchangeRates.value.USD
+    }
+
+    const eurusd = await fetchStockData('EURUSD=X')
+    if (eurusd.price > 0 && exchangeRates.value.USD) {
+      exchangeRates.value.EUR = eurusd.price * exchangeRates.value.USD
+    }
+
+    const usdkrw = await fetchStockData('USDKRW=X')
+    if (usdkrw.price > 0 && exchangeRates.value.USD) {
+      exchangeRates.value.KRW = exchangeRates.value.USD / usdkrw.price
+    }
+  } catch (err) {
+    console.error('抓取即時匯率失敗，使用預設值', err)
+  }
+}
+
 const fetchTaiwanBankGoldPrice = async () => {
   try {
     const goldRes = await axios.get('/yahoo/v8/finance/chart/GC=F?interval=1d&range=1d')
@@ -201,6 +263,8 @@ const fetchTaiwanBankGoldPrice = async () => {
 
 const calculatePortfolio = async () => {
   isCalculating.value = true
+  await fetchExchangeRates()
+
   const summary = {}
   let realizedTWD = 0
   let realizedUSD = 0
@@ -243,7 +307,7 @@ const calculatePortfolio = async () => {
         const cashVal = Number(tx.dividendCash)
         item.totalCost -= cashVal
         if (tx.currency === 'USD') {
-          const cashInTWD = cashVal * 32.5
+          const cashInTWD = cashVal * exchangeRates.value.USD
           usDivTotal += cashInTWD
           if (!usYearlyDivs[year]) usYearlyDivs[year] = 0
           usYearlyDivs[year] += cashInTWD
@@ -260,7 +324,7 @@ const calculatePortfolio = async () => {
       const st = runningSummary[t]
       if (st.shares > 0) {
         let val = st.totalCost
-        if (st.currency === 'USD') val *= 32.5
+        if (st.currency === 'USD') val *= exchangeRates.value.USD
         dayTotalCost += val
       }
     }
@@ -285,11 +349,9 @@ const calculatePortfolio = async () => {
     }
   })
 
-  const rateData = await fetchStockData('TWD=X')
-  if (rateData.price > 0) exchangeRate.value = rateData.price
-
   goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
 
+  // 處理黃金與債券
   const gbSummary = {}
   const gbLatestMarketValue = {}
 
@@ -315,7 +377,7 @@ const calculatePortfolio = async () => {
       if (tx.dividendCash) {
         item.totalDividend += Number(tx.dividendCash)
         item.totalCost -= Number(tx.dividendCash)
-        const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRate.value : Number(tx.dividendCash)
+        const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRates.value.USD : Number(tx.dividendCash)
         twDivTotal += divTWD
         const yr = tx.date.split('-')[0]
         if (!twYearlyDivs[yr]) twYearlyDivs[yr] = 0
@@ -351,8 +413,8 @@ const calculatePortfolio = async () => {
         item.currentPrice = item.amount > 0 ? manualVal / item.amount : manualVal
         item.avgCost = item.amount > 0 ? item.totalCost / item.amount : 0
 
-        const costTWD = item.currency === 'USD' ? item.totalCost * exchangeRate.value : item.totalCost
-        const valTWD = item.currency === 'USD' ? item.marketValue * exchangeRate.value : item.marketValue
+        const costTWD = item.currency === 'USD' ? item.totalCost * exchangeRates.value.USD : item.totalCost
+        const valTWD = item.currency === 'USD' ? item.marketValue * exchangeRates.value.USD : item.marketValue
         item.unrealizedPnL = valTWD - costTWD
         item.pnlPercent = costTWD > 0 ? (item.unrealizedPnL / costTWD) * 100 : 0
 
@@ -369,7 +431,43 @@ const calculatePortfolio = async () => {
   goldBondsTotalCost.value = gbCostSum
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
-  totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRate.value)
+  // 處理銀行帳戶資產
+  const bankMap = {}
+  const curSummary = {}
+
+  bankTransactions.value.forEach(tx => {
+    const key = `${tx.bankName}_${tx.accountType}_${tx.currency}`
+    bankMap[key] = {
+      bankName: tx.bankName,
+      accountType: tx.accountType,
+      currency: tx.currency,
+      balance: Number(tx.balance) || 0,
+      date: tx.date,
+      id: tx.id
+    }
+  })
+
+  let totalBankTWD = 0
+  const bankList = []
+
+  for (const k in bankMap) {
+    const b = bankMap[k]
+    const rate = exchangeRates.value[b.currency] || 1
+    const valTWD = b.balance * rate
+    b.marketValueTWD = valTWD
+    totalBankTWD += valTWD
+
+    if (!curSummary[b.currency]) curSummary[b.currency] = 0
+    curSummary[b.currency] += b.balance
+
+    bankList.push(b)
+  }
+
+  bankPortfolioRaw.value = bankList
+  bankCurrenciesSummary.value = curSummary
+  bankAssetsTWD.value = totalBankTWD
+
+  totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRates.value.USD)
   taiwanTotalDividendTWD.value = twDivTotal
   taiwanYearlyDividendSummary.value = twYearlyDivs
   usTotalDividendTWD.value = usDivTotal
@@ -404,8 +502,8 @@ const calculatePortfolio = async () => {
       item.stopPrice = tSetting.stopPrice ? Number(tSetting.stopPrice) : null
 
       if (item.currency === 'USD') {
-        const marketValueTWD = item.marketValue * exchangeRate.value
-        const totalCostTWD = item.totalCost * exchangeRate.value
+        const marketValueTWD = item.marketValue * exchangeRates.value.USD
+        const totalCostTWD = item.totalCost * exchangeRates.value.USD
         usTWD += marketValueTWD
         totalTWD += marketValueTWD
         usCostSumTWD += totalCostTWD
@@ -421,7 +519,7 @@ const calculatePortfolio = async () => {
     }
   }
 
-  totalTWD = twTWD + usTWD + gbTWD
+  totalTWD = twTWD + usTWD + gbTWD + totalBankTWD
 
   taiwanPortfolioRaw.value = twList
   usPortfolioRaw.value = usList
@@ -472,14 +570,14 @@ const updateBarChartData = () => {
 
   if (sorted.length <= 5) {
     chartLabels = sorted.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
-    chartValues = sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
+    chartValues = sorted.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRates.value.USD : item.marketValue)
   } else {
     const top5 = sorted.slice(0, 5)
     chartLabels = top5.map(item => item.name.length > 8 ? item.name.substring(0, 8) + '...' : item.name)
-    chartValues = top5.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRate.value : item.marketValue)
+    chartValues = top5.map(item => barMarketTab.value === 'US' ? item.marketValue * exchangeRates.value.USD : item.marketValue)
 
     const othersSum = sorted.slice(5).reduce((acc, cur) => {
-      const val = barMarketTab.value === 'US' ? cur.marketValue * exchangeRate.value : cur.marketValue
+      const val = barMarketTab.value === 'US' ? cur.marketValue * exchangeRates.value.USD : cur.marketValue
       return acc + val
     }, 0)
 
@@ -503,6 +601,8 @@ const loadTransactions = async () => {
   if (savedData) transactions.value = savedData
   const savedGB = await localforage.getItem(GB_DB_KEY)
   if (savedGB) goldBondsTransactions.value = savedGB
+  const savedBank = await localforage.getItem(BANK_DB_KEY)
+  if (savedBank) bankTransactions.value = savedBank
   const savedTargets = await localforage.getItem(TARGET_DB_KEY)
   if (savedTargets) stockTargets.value = savedTargets
   await calculatePortfolio()
@@ -588,6 +688,28 @@ const saveGBTransaction = async () => {
   await calculatePortfolio()
 }
 
+const saveBankTransaction = async () => {
+  const newTx = {
+    id: crypto.randomUUID(),
+    bankName: bankFormData.value.bankName.trim(),
+    accountType: bankFormData.value.accountType,
+    currency: bankFormData.value.currency,
+    balance: Number(bankFormData.value.balance) || 0,
+    date: bankFormData.value.date
+  }
+  bankTransactions.value.push(newTx)
+  await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
+  showBankForm.value = false
+  resetBankForm()
+  await calculatePortfolio()
+}
+
+const deleteBankTransaction = async (id) => {
+  bankTransactions.value = bankTransactions.value.filter(tx => tx.id !== id)
+  await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
+  await calculatePortfolio()
+}
+
 const deleteGBTransaction = async (id) => {
   goldBondsTransactions.value = goldBondsTransactions.value.filter(tx => tx.id !== id)
   await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
@@ -604,6 +726,7 @@ const exportBackup = () => {
   const backupData = {
     transactions: transactions.value,
     goldBondsTransactions: goldBondsTransactions.value,
+    bankTransactions: bankTransactions.value,
     stockTargets: stockTargets.value,
     exportDate: new Date().toISOString()
   }
@@ -636,6 +759,10 @@ const importBackup = async (event) => {
       if (content.goldBondsTransactions && Array.isArray(content.goldBondsTransactions)) {
         goldBondsTransactions.value = content.goldBondsTransactions
         await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
+      }
+      if (content.bankTransactions && Array.isArray(content.bankTransactions)) {
+        bankTransactions.value = content.bankTransactions
+        await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
       }
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
@@ -699,6 +826,16 @@ const resetGBForm = () => {
     fee: 0,
     currency: 'TWD',
     dividendCash: 0
+  }
+}
+
+const resetBankForm = () => {
+  bankFormData.value = {
+    bankName: '',
+    accountType: '活存',
+    currency: 'TWD',
+    balance: null,
+    date: new Date().toISOString().split('T')[0]
   }
 }
 
@@ -767,7 +904,7 @@ onMounted(() => {
       </div>
 
       <div class="sub-assets-box" style="margin-top: 8px;">
-        <div class="market-summary-item" style="border: none;">
+        <div class="market-summary-item">
           <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
           <br>
           <small>未實現：
@@ -776,6 +913,9 @@ onMounted(() => {
               ({{ goldBondsTotalCost > 0 ? ((goldBondsUnrealizedPnL / goldBondsTotalCost) * 100).toFixed(2) : 0 }}%)
             </strong>
           </small>
+        </div>
+        <div class="market-summary-item" style="border: none;">
+          <span>銀行帳戶市值：${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
         </div>
       </div>
 
@@ -807,7 +947,6 @@ onMounted(() => {
     <!-- 2. 台股子目錄 (TW) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'TW'">
-      <!-- 台股頂端股利摘要 -->
       <div class="dividend-summary-box">
         <p><strong>台股總累積現金股利：</strong> <span class="div-highlight">${{ taiwanTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
         <div class="yearly-div-list" v-if="Object.keys(taiwanYearlyDividendSummary).length > 0">
@@ -926,7 +1065,6 @@ onMounted(() => {
     <!-- 3. 美股子目錄 (US) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'US'">
-      <!-- 美股頂端股利摘要 -->
       <div class="dividend-summary-box">
         <p><strong>美股總累積現金股利：</strong> <span class="div-highlight">${{ usTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
         <div class="yearly-div-list" v-if="Object.keys(usYearlyDividendSummary).length > 0">
@@ -1125,14 +1263,76 @@ onMounted(() => {
     <!-- 6. 銀行帳戶子目錄 (bank) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'bank'">
-      <section class="placeholder-section">
-        <h3>🏦 銀行台幣/外幣活存定存</h3>
-        <p class="empty-msg">此子目錄建置中，稍待將新增銀行帳戶與定存追蹤功能。</p>
+      <!-- 頂端各幣別與總市值摘要 -->
+      <div class="dividend-summary-box">
+        <p><strong>銀行帳戶換算台幣總值：</strong> <span class="div-highlight">${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <div class="yearly-div-list" v-if="Object.keys(bankCurrenciesSummary).length > 0">
+          <small v-for="(amt, cur) in bankCurrenciesSummary" :key="cur" class="yearly-tag">
+            {{ cur }}: {{ amt.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} 
+            (折合NTD: ${{ Math.round(amt * (exchangeRates.value[cur] || 1)).toLocaleString() }})
+          </small>
+        </div>
+      </div>
+
+      <section class="portfolio">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">各銀行帳戶列表</h3>
+          <button @click="isBankOpen = !isBankOpen" class="toggle-chart-btn">
+            {{ isBankOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+
+        <div v-show="isBankOpen">
+          <p v-if="bankPortfolioRaw.length === 0" class="empty-msg">目前無銀行帳戶資料。</p>
+          
+          <div v-else class="card-grid">
+            <div v-for="acc in bankPortfolioRaw" :key="acc.id" class="stock-card">
+              <div class="card-header">
+                <div>
+                  <strong class="stock-name">{{ acc.bankName }}</strong> 
+                  <span class="stock-ticker">({{ acc.accountType }})</span>
+                </div>
+                <span>{{ acc.currency }} {{ acc.balance.toLocaleString() }}</span>
+              </div>
+              <div class="card-body">
+                <p>折合台幣：<strong>${{ Math.round(acc.marketValueTWD).toLocaleString() }} TWD</strong></p>
+                <small style="color: #64748b;">登記日期：{{ acc.date }}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 銀行歷史紀錄 (可收合) -->
+      <section class="history-dark-section" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">銀行帳戶紀錄清單</h3>
+          <button @click="isBankHistoryOpen = !isBankHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isBankHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isBankHistoryOpen" style="margin-top: 15px;">
+          <p v-if="bankTransactions.length === 0" class="empty-dark-msg">目前無銀行帳戶紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in bankTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.bankName }}</strong>
+                <span class="tag-dark-div" style="margin-right: 6px;">{{ tx.accountType }}</span>
+                <span class="tag-dark-buy">{{ tx.currency }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 金額: ${{ tx.balance.toLocaleString() }} {{ tx.currency }}</small>
+              </div>
+              <button @click="deleteBankTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </li>
+          </ul>
+        </div>
       </section>
     </main>
 
     <!-- 浮動新增按鈕 -->
-    <button @click="currentTab === 'gold_bonds' ? showGBForm = true : showForm = true" class="fab-button">+</button>
+    <button @click="currentTab === 'gold_bonds' ? showGBForm = (currentTab === 'gold_bonds') : (currentTab === 'bank' ? showBankForm = true : showForm = true)" class="fab-button" v-if="currentTab !== 'funds' && currentTab !== 'overview'">+</button>
+    <button @click="showGBForm = true" class="fab-button" v-if="currentTab === 'gold_bonds'">+</button>
 
     <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
@@ -1232,7 +1432,42 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 個股歷史紀錄專屬彈窗 (點擊庫存卡片/表格時開啟，內含修改與刪除) -->
+    <!-- 新增銀行帳戶彈窗 -->
+    <div v-if="showBankForm" class="modal-overlay">
+      <div class="modal-content">
+        <h3>新增銀行帳戶紀錄</h3>
+        <form @submit.prevent="saveBankTransaction">
+          <div class="form-group"><label>銀行名稱</label><input v-model="bankFormData.bankName" type="text" required placeholder="如：國泰世華、郵局、兆豐"></div>
+          <div class="form-group"><label>日期</label><input v-model="bankFormData.date" type="date" required></div>
+          <div class="form-group">
+            <label>帳戶類型</label>
+            <select v-model="bankFormData.accountType">
+              <option value="活存">活存</option>
+              <option value="定存">定存</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>幣別</label>
+            <select v-model="bankFormData.currency">
+              <option value="TWD">台幣 (TWD)</option>
+              <option value="USD">美金 (USD)</option>
+              <option value="JPY">日元 (JPY)</option>
+              <option value="AUD">澳幣 (AUD)</option>
+              <option value="EUR">歐元 (EUR)</option>
+              <option value="KRW">韓元 (KRW)</option>
+            </select>
+          </div>
+          <div class="form-group"><label>現值金額</label><input v-model="bankFormData.balance" type="number" step="any" required placeholder="請輸入帳戶現值"></div>
+
+          <div class="form-actions">
+            <button type="button" @click="showBankForm = false" class="cancel-btn">取消</button>
+            <button type="submit" class="submit-btn">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 個股歷史紀錄專屬彈窗 -->
     <div v-if="selectedTickerModal" class="modal-overlay" @click.self="selectedTickerModal = null">
       <div class="modal-content">
         <h3>{{ selectedTickerModal }} 歷史紀錄</h3>
@@ -1267,8 +1502,8 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
 
 .sub-assets-box { display: flex; justify-content: space-around; margin: 6px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.market-summary-item { text-align: center; flex: 1; }
-.market-summary-item:first-child { border-right: 1px solid #eee; }
+.market-summary-item { text-align: center; flex: 1; border-right: 1px solid #eee; }
+.market-summary-item:last-child { border-right: none; }
 
 .dividend-summary-box { background: #fff; padding: 10px 14px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9em; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: left; }
 .div-highlight { color: #0284c7; font-weight: bold; }
