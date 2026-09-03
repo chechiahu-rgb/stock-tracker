@@ -35,14 +35,12 @@ localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
 const GB_DB_KEY = 'gold_bonds_records'
-const BANK_DB_KEY = 'bank_records'
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
 const goldBondsAssetsTWD = ref(0)
-const bankAssetsTWD = ref(0)
 const totalRealizedPnLTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
@@ -58,11 +56,6 @@ const taiwanTotalDividendTWD = ref(0)
 const taiwanYearlyDividendSummary = ref({})
 const usTotalDividendTWD = ref(0)
 const usYearlyDividendSummary = ref({})
-
-// 銀行資產與匯率
-const bankTransactions = ref([])
-const bankPortfolioRaw = ref([])
-const bankCurrenciesSummary = ref({})
 
 const exchangeRates = ref({
   TWD: 1,
@@ -96,15 +89,13 @@ const isUsOpen = ref(true)
 const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
-const isBankOpen = ref(true)
-const isBankHistoryOpen = ref(false)
+const isFundsOpen = ref(true)
 
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
 const showGBForm = ref(false)
-const showBankForm = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const selectedGBNameModal = ref(null)
@@ -114,7 +105,6 @@ const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
 // 編輯交易狀態
 const editingTxId = ref(null)
 const editingGBTxId = ref(null)
-const editingBankId = ref(null)
 
 const formData = ref({
   ticker: '',
@@ -139,14 +129,6 @@ const gbFormData = ref({
   fee: 0,
   currency: 'TWD',
   dividendCash: 0
-})
-
-const bankFormData = ref({
-  bankName: '',
-  accountType: '活存',
-  currency: 'TWD',
-  balance: null,
-  date: new Date().toISOString().split('T')[0]
 })
 
 const lineChartData = ref({ labels: [], datasets: [] })
@@ -431,27 +413,6 @@ const calculatePortfolio = async () => {
   goldBondsTotalCost.value = gbCostSum
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
-  // 處理銀行帳戶資產
-  let totalBankTWD = 0
-  const curSummary = {}
-  const bankList = []
-
-  bankTransactions.value.forEach(acc => {
-    const rate = exchangeRates.value[acc.currency] || 1
-    const valTWD = Number(acc.balance) * rate
-    acc.marketValueTWD = valTWD
-    totalBankTWD += valTWD
-
-    if (!curSummary[acc.currency]) curSummary[acc.currency] = 0
-    curSummary[acc.currency] += Number(acc.balance)
-
-    bankList.push(acc)
-  })
-
-  bankPortfolioRaw.value = bankList
-  bankCurrenciesSummary.value = curSummary
-  bankAssetsTWD.value = totalBankTWD
-
   totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRates.value.USD)
   taiwanTotalDividendTWD.value = twDivTotal
   taiwanYearlyDividendSummary.value = twYearlyDivs
@@ -504,7 +465,7 @@ const calculatePortfolio = async () => {
     }
   }
 
-  totalTWD = twTWD + usTWD + gbTWD + totalBankTWD
+  totalTWD = twTWD + usTWD + gbTWD
 
   taiwanPortfolioRaw.value = twList
   usPortfolioRaw.value = usList
@@ -586,8 +547,6 @@ const loadTransactions = async () => {
   if (savedData) transactions.value = savedData
   const savedGB = await localforage.getItem(GB_DB_KEY)
   if (savedGB) goldBondsTransactions.value = savedGB
-  const savedBank = await localforage.getItem(BANK_DB_KEY)
-  if (savedBank) bankTransactions.value = savedBank
   const savedTargets = await localforage.getItem(TARGET_DB_KEY)
   if (savedTargets) stockTargets.value = savedTargets
   await calculatePortfolio()
@@ -717,57 +676,6 @@ const deleteGBTransaction = async (id) => {
   await calculatePortfolio()
 }
 
-// 銀行資料儲存與編輯
-const saveBankTransaction = async () => {
-  if (editingBankId.value) {
-    const index = bankTransactions.value.findIndex(b => b.id === editingBankId.value)
-    if (index !== -1) {
-      bankTransactions.value[index] = {
-        ...bankTransactions.value[index],
-        bankName: bankFormData.value.bankName.trim(),
-        accountType: bankFormData.value.accountType,
-        currency: bankFormData.value.currency,
-        balance: Number(bankFormData.value.balance) || 0,
-        date: bankFormData.value.date
-      }
-    }
-    editingBankId.value = null
-  } else {
-    const newBank = {
-      id: crypto.randomUUID(),
-      bankName: bankFormData.value.bankName.trim(),
-      accountType: bankFormData.value.accountType,
-      currency: bankFormData.value.currency,
-      balance: Number(bankFormData.value.balance) || 0,
-      date: bankFormData.value.date
-    }
-    bankTransactions.value.push(newBank)
-  }
-
-  await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
-  showBankForm.value = false
-  resetBankForm()
-  await calculatePortfolio()
-}
-
-const editBankTransaction = (acc) => {
-  editingBankId.value = acc.id
-  bankFormData.value = {
-    bankName: acc.bankName,
-    accountType: acc.accountType,
-    currency: acc.currency,
-    balance: acc.balance,
-    date: acc.date
-  }
-  showBankForm.value = true
-}
-
-const deleteBankTransaction = async (id) => {
-  bankTransactions.value = bankTransactions.value.filter(b => b.id !== id)
-  await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
-  await calculatePortfolio()
-}
-
 const deleteTransaction = async (id) => {
   transactions.value = transactions.value.filter(tx => tx.id !== id)
   await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
@@ -778,7 +686,6 @@ const exportBackup = () => {
   const backupData = {
     transactions: transactions.value,
     goldBondsTransactions: goldBondsTransactions.value,
-    bankTransactions: bankTransactions.value,
     stockTargets: stockTargets.value,
     exportDate: new Date().toISOString()
   }
@@ -811,10 +718,6 @@ const importBackup = async (event) => {
       if (content.goldBondsTransactions && Array.isArray(content.goldBondsTransactions)) {
         goldBondsTransactions.value = content.goldBondsTransactions
         await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
-      }
-      if (content.bankTransactions && Array.isArray(content.bankTransactions)) {
-        bankTransactions.value = content.bankTransactions
-        await localforage.setItem(BANK_DB_KEY, JSON.parse(JSON.stringify(bankTransactions.value)))
       }
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
@@ -882,17 +785,6 @@ const resetGBForm = () => {
   }
 }
 
-const resetBankForm = () => {
-  editingBankId.value = null
-  bankFormData.value = {
-    bankName: '',
-    accountType: '活存',
-    currency: 'TWD',
-    balance: null,
-    date: new Date().toISOString().split('T')[0]
-  }
-}
-
 const filteredTransactionsByTicker = computed(() => {
   if (!selectedTickerModal.value) return []
   return transactions.value.filter(tx => tx.ticker === selectedTickerModal.value)
@@ -915,14 +807,13 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 主導航目錄選單 (完美對應 6 個選項的 Grid 網格) -->
-      <div class="nav-menu-grid" style="grid-template-columns: repeat(6, 1fr);">
+      <!-- 主導航目錄選單 (恢復為 5 個核心目錄) -->
+      <div class="nav-menu-grid" style="grid-template-columns: repeat(5, 1fr);">
         <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽</button>
         <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
         <button :class="['nav-btn', currentTab === 'US' ? 'active-nav' : '']" @click="currentTab = 'US'">📉 美股</button>
         <button :class="['nav-btn', currentTab === 'funds' ? 'active-nav' : '']" @click="currentTab = 'funds'">🌐 基金</button>
-        <button :class="['nav-btn', currentTab === 'gold_bonds' ? 'active-nav' : '']" @click="currentTab = 'gold_bonds'">🥇 黃金</button>
-        <button :class="['nav-btn', currentTab === 'bank' ? 'active-nav' : '']" @click="currentTab = 'bank'">🏦 銀行</button>
+        <button :class="['nav-btn', currentTab === 'gold_bonds' ? 'active-nav' : '']" @click="currentTab = 'gold_bonds'">🥇 黃金/債券</button>
       </div>
 
       <!-- 快捷工具列 (備份還原) -->
@@ -963,7 +854,7 @@ onMounted(() => {
       </div>
 
       <div class="sub-assets-box" style="margin-top: 8px;">
-        <div class="market-summary-item">
+        <div class="market-summary-item" style="border: none;">
           <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
           <br>
           <small>未實現：
@@ -972,9 +863,6 @@ onMounted(() => {
               ({{ goldBondsTotalCost > 0 ? ((goldBondsUnrealizedPnL / goldBondsTotalCost) * 100).toFixed(2) : 0 }}%)
             </strong>
           </small>
-        </div>
-        <div class="market-summary-item" style="border: none;">
-          <span>銀行資產市值：${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
         </div>
       </div>
 
@@ -1003,7 +891,7 @@ onMounted(() => {
     </div>
 
     <!-- ========================================== -->
-    <!-- 2. 台股子目錄 (TW) -->
+    <!-- 2. 台股子目錄 (TW) - 帶有卡片折疊收合功能 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'TW'">
       <div class="dividend-summary-box">
@@ -1032,59 +920,67 @@ onMounted(() => {
       </div>
 
       <section class="portfolio">
-        <h3>台股持股庫存</h3>
-        <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
-        
-        <div v-else-if="viewMode === 'card'" class="card-grid">
-          <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
-            <div class="card-header" @click="selectedTickerModal = stock.ticker">
-              <div>
-                <strong class="stock-name">{{ stock.name }}</strong> 
-                <span class="stock-ticker">({{ stock.ticker }})</span>
-              </div>
-              <span>{{ stock.shares.toLocaleString() }} 股</span>
-            </div>
-            <div class="card-body" @click="selectedTickerModal = stock.ticker">
-              <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
-              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
-              <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
-              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
-              </p>
-            </div>
-            <div class="card-footer-action">
-              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-            </div>
-          </div>
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">台股持股庫存</h3>
+          <button @click="isTaiwanOpen = !isTaiwanOpen" class="toggle-chart-btn">
+            {{ isTaiwanOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
 
-        <div v-else class="table-container">
-          <table class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>股數</th>
-                <th>現價 / 市值</th>
-                <th>均價</th>
-                <th>未實現損益</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
-                <td @click="selectedTickerModal = stock.ticker">
-                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                <td @click="selectedTickerModal = stock.ticker">
-                  ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-show="isTaiwanOpen">
+          <p v-if="taiwanPortfolio.length === 0" class="empty-msg">目前無台股庫存。</p>
+          
+          <div v-else-if="viewMode === 'card'" class="card-grid">
+            <div v-for="stock in taiwanPortfolio" :key="stock.ticker" class="stock-card">
+              <div class="card-header" @click="selectedTickerModal = stock.ticker">
+                <div>
+                  <strong class="stock-name">{{ stock.name }}</strong> 
+                  <span class="stock-ticker">({{ stock.ticker }})</span>
+                </div>
+                <span>{{ stock.shares.toLocaleString() }} 股</span>
+              </div>
+              <div class="card-body" @click="selectedTickerModal = stock.ticker">
+                <p>現價：${{ stock.currentPrice.toFixed(2) }} TWD</p>
+                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} TWD</p>
+                <p>成本均價：${{ stock.avgCost.toFixed(2) }} TWD</p>
+                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} ({{ stock.pnlPercent.toFixed(2) }}%)
+                </p>
+              </div>
+              <div class="card-footer-action">
+                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="table-container">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>股數</th>
+                  <th>現價 / 市值</th>
+                  <th>均價</th>
+                  <th>未實現損益</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in taiwanPortfolio" :key="stock.ticker">
+                  <td @click="selectedTickerModal = stock.ticker">
+                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                  <td @click="selectedTickerModal = stock.ticker">
+                    ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1121,7 +1017,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 3. 美股子目錄 (US) -->
+    <!-- 3. 美股子目錄 (US) - 帶有卡片折疊收合功能 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'US'">
       <div class="dividend-summary-box">
@@ -1150,59 +1046,67 @@ onMounted(() => {
       </div>
 
       <section class="portfolio">
-        <h3>美股持股庫存</h3>
-        <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
-        
-        <div v-else-if="viewMode === 'card'" class="card-grid">
-          <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
-            <div class="card-header" @click="selectedTickerModal = stock.ticker">
-              <div>
-                <strong class="stock-name">{{ stock.name }}</strong> 
-                <span class="stock-ticker">({{ stock.ticker }})</span>
-              </div>
-              <span>{{ stock.shares.toLocaleString() }} 股</span>
-            </div>
-            <div class="card-body" @click="selectedTickerModal = stock.ticker">
-              <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
-              <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
-              <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
-              <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
-              </p>
-            </div>
-            <div class="card-footer-action">
-              <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
-            </div>
-          </div>
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">美股持股庫存</h3>
+          <button @click="isUsOpen = !isUsOpen" class="toggle-chart-btn">
+            {{ isUsOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
 
-        <div v-else class="table-container">
-          <table class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>股數</th>
-                <th>現價 / 市值</th>
-                <th>均價</th>
-                <th>未實現損益</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in usPortfolio" :key="stock.ticker">
-                <td @click="selectedTickerModal = stock.ticker">
-                  <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
-                <td @click="selectedTickerModal = stock.ticker">
-                  ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
-                </td>
-                <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
-                <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-show="isUsOpen">
+          <p v-if="usPortfolio.length === 0" class="empty-msg">目前無美股庫存。</p>
+          
+          <div v-else-if="viewMode === 'card'" class="card-grid">
+            <div v-for="stock in usPortfolio" :key="stock.ticker" class="stock-card">
+              <div class="card-header" @click="selectedTickerModal = stock.ticker">
+                <div>
+                  <strong class="stock-name">{{ stock.name }}</strong> 
+                  <span class="stock-ticker">({{ stock.ticker }})</span>
+                </div>
+                <span>{{ stock.shares.toLocaleString() }} 股</span>
+              </div>
+              <div class="card-body" @click="selectedTickerModal = stock.ticker">
+                <p>現價：${{ stock.currentPrice.toFixed(2) }} USD</p>
+                <p>市值：${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD</p>
+                <p>成本均價：${{ stock.avgCost.toFixed(2) }} USD</p>
+                <p :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ stock.unrealizedPnL.toFixed(2) }} USD ({{ stock.pnlPercent.toFixed(2) }}%)
+                </p>
+              </div>
+              <div class="card-footer-action">
+                <button @click="openTargetModal(stock.ticker)" class="target-setting-btn">設定目標/警戒價</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="table-container">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>股數</th>
+                  <th>現價 / 市值</th>
+                  <th>均價</th>
+                  <th>未實現損益</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in usPortfolio" :key="stock.ticker">
+                  <td @click="selectedTickerModal = stock.ticker">
+                    <strong>{{ stock.name }}</strong><br><small>{{ stock.ticker }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">{{ stock.shares.toLocaleString() }}</td>
+                  <td @click="selectedTickerModal = stock.ticker">
+                    ${{ stock.currentPrice.toFixed(2) }}<br><small>市:${{ stock.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</small>
+                  </td>
+                  <td @click="selectedTickerModal = stock.ticker">${{ stock.avgCost.toFixed(2) }}</td>
+                  <td @click="selectedTickerModal = stock.ticker" :class="stock.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.unrealizedPnL.toFixed(0) }}<br>({{ stock.pnlPercent.toFixed(1) }}%)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1239,17 +1143,27 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 4. 基金子目錄 (funds) -->
+    <!-- 4. 基金子目錄 (funds) - 帶有折疊收合功能 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'funds'">
-      <section class="placeholder-section">
-        <h3>🌐 基金資產管理</h3>
-        <p class="empty-msg">此子目錄建置中，稍待將新增基金相關追蹤功能。</p>
+      <section class="portfolio">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0;">🌐 基金資產管理</h3>
+          <button @click="isFundsOpen = !isFundsOpen" class="toggle-chart-btn">
+            {{ isFundsOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+
+        <div v-show="isFundsOpen">
+          <section class="placeholder-section" style="margin-top: 0;">
+            <p class="empty-msg">此子目錄建置中，稍待將新增基金相關追蹤功能。</p>
+          </section>
+        </div>
       </section>
     </main>
 
     <!-- ========================================== -->
-    <!-- 5. 黃金/債券子目錄 (gold_bonds) -->
+    <!-- 5. 黃金/債券子目錄 (gold_bonds) - 帶有卡片折疊收合功能 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'gold_bonds'">
       <section class="portfolio">
@@ -1321,86 +1235,8 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- ========================================== -->
-    <!-- 6. 銀行帳戶子目錄 (bank) -->
-    <!-- ========================================== -->
-    <main v-if="currentTab === 'bank'">
-      <div class="dividend-summary-box">
-        <p><strong>銀行資產折合台幣總值：</strong> <span class="div-highlight">${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
-        <div class="yearly-div-list" v-if="Object.keys(bankCurrenciesSummary).length > 0">
-          <small v-for="(amt, cur) in bankCurrenciesSummary" :key="cur" class="yearly-tag">
-            {{ cur }}: ${{ amt.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} 
-            (折合NTD: ${{ Math.round(amt * (exchangeRates.value[cur] || 1)).toLocaleString() }})
-          </small>
-        </div>
-        <p v-else style="color: #64748b; font-size: 0.9em; margin-top: 5px;">目前尚無登錄任何銀行或外幣活存/定存帳戶。</p>
-      </div>
-
-      <section class="portfolio">
-        <div class="chart-header-row" style="margin-bottom: 12px;">
-          <h3 style="margin: 0;">各銀行帳戶列表</h3>
-          <button @click="isBankOpen = !isBankOpen" class="toggle-chart-btn">
-            {{ isBankOpen ? '收起 🔼' : '展開 🔽' }}
-          </button>
-        </div>
-
-        <div v-show="isBankOpen">
-          <p v-if="bankPortfolioRaw.length === 0" class="empty-msg">目前無銀行帳戶資料，請點擊右下角「+」新增帳戶。</p>
-          
-          <div v-else class="card-grid">
-            <div v-for="acc in bankPortfolioRaw" :key="acc.id" class="stock-card">
-              <div class="card-header" @click="editBankTransaction(acc)">
-                <div>
-                  <strong class="stock-name">{{ acc.bankName }}</strong> 
-                  <span class="stock-ticker">({{ acc.accountType }} - {{ acc.currency }})</span>
-                </div>
-                <span>{{ acc.currency }} {{ Number(acc.balance).toLocaleString() }}</span>
-              </div>
-              <div class="card-body" @click="editBankTransaction(acc)">
-                <p>折合台幣市值：<strong>${{ Math.round(acc.marketValueTWD).toLocaleString() }} TWD</strong></p>
-                <small style="color: #64748b;">更新日期：{{ acc.date }}</small>
-              </div>
-              <div class="card-footer-action">
-                <button @click="editBankTransaction(acc)" class="target-setting-btn" style="margin-right: 6px;">修改</button>
-                <button @click="deleteBankTransaction(acc.id)" class="target-setting-btn" style="background: #fee2e2; color: #dc2626; border-color: #fecaca;">刪除</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 銀行帳戶歷史紀錄 (可收合) -->
-      <section class="history-dark-section" style="margin-top: 20px;">
-        <div class="chart-header-row" style="margin-bottom: 0;">
-          <h3 style="margin: 0; border: none; padding: 0;">銀行帳戶紀錄清單</h3>
-          <button @click="isBankHistoryOpen = !isBankHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
-            {{ isBankHistoryOpen ? '收起 🔼' : '展開 🔽' }}
-          </button>
-        </div>
-        
-        <div v-show="isBankHistoryOpen" style="margin-top: 15px;">
-          <p v-if="bankTransactions.length === 0" class="empty-dark-msg">目前無銀行帳戶紀錄。</p>
-          <ul v-else class="tx-dark-list">
-            <li v-for="acc in bankTransactions.slice().reverse()" :key="acc.id" class="tx-dark-item">
-              <div class="tx-info">
-                <strong class="tx-ticker">{{ acc.bankName }}</strong>
-                <span class="tag-dark-div" style="margin-right: 6px;">{{ acc.accountType }}</span>
-                <span class="tag-dark-buy">{{ acc.currency }}</span>
-                <br>
-                <small class="tx-sub">{{ acc.date }} | 現值: ${{ Number(acc.balance).toLocaleString() }} {{ acc.currency }}</small>
-              </div>
-              <div style="display: flex; gap: 6px;">
-                <button @click="editBankTransaction(acc)" class="edit-dark-btn">修改</button>
-                <button @click="deleteBankTransaction(acc.id)" class="delete-dark-btn">刪除</button>
-              </div>
-            </li>
-          </ul>
-        </div>
-      </section>
-    </main>
-
     <!-- 浮動新增按鈕 -->
-    <button @click="currentTab === 'gold_bonds' ? showGBForm = true : (currentTab === 'bank' ? showBankForm = true : showForm = true)" class="fab-button" v-if="currentTab !== 'funds' && currentTab !== 'overview'">+</button>
+    <button @click="currentTab === 'gold_bonds' ? showGBForm = true : showForm = true" class="fab-button" v-if="currentTab !== 'funds' && currentTab !== 'overview'">+</button>
 
     <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
@@ -1500,41 +1336,6 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 新增/修改銀行帳戶彈窗 -->
-    <div v-if="showBankForm" class="modal-overlay">
-      <div class="modal-content">
-        <h3>{{ editingBankId ? '修改銀行帳戶' : '新增銀行帳戶' }}</h3>
-        <form @submit.prevent="saveBankTransaction">
-          <div class="form-group"><label>銀行名稱</label><input v-model="bankFormData.bankName" type="text" required placeholder="如：國泰世華、郵局、兆豐"></div>
-          <div class="form-group"><label>日期</label><input v-model="bankFormData.date" type="date" required></div>
-          <div class="form-group">
-            <label>帳戶類型</label>
-            <select v-model="bankFormData.accountType">
-              <option value="活存">活存</option>
-              <option value="定存">定存</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>幣別</label>
-            <select v-model="bankFormData.currency">
-              <option value="TWD">台幣 (TWD)</option>
-              <option value="USD">美金 (USD)</option>
-              <option value="JPY">日元 (JPY)</option>
-              <option value="EUR">歐元 (EUR)</option>
-              <option value="AUD">澳幣 (AUD)</option>
-              <option value="KRW">韓元 (KRW)</option>
-            </select>
-          </div>
-          <div class="form-group"><label>現值金額</label><input v-model="bankFormData.balance" type="number" step="any" required placeholder="請輸入帳戶現值金額"></div>
-
-          <div class="form-actions">
-            <button type="button" @click="showBankForm = false; resetBankForm();" class="cancel-btn">取消</button>
-            <button type="submit" class="submit-btn">儲存</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
     <!-- 個股歷史紀錄專屬彈窗 -->
     <div v-if="selectedTickerModal" class="modal-overlay" @click.self="selectedTickerModal = null">
       <div class="modal-content">
@@ -1590,7 +1391,7 @@ onMounted(() => {
 header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
 
 .nav-menu-grid { display: grid; gap: 6px; margin-top: 15px; }
-.nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 2px; border-radius: 8px; font-weight: bold; font-size: 0.8em; cursor: pointer; transition: 0.2s; }
+.nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 4px; border-radius: 8px; font-weight: bold; font-size: 0.9em; cursor: pointer; transition: 0.2s; }
 .nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
 
 .sub-assets-box { display: flex; justify-content: space-around; margin: 6px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
