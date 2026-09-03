@@ -51,8 +51,11 @@ const usUnrealizedPnL = ref(0)
 const goldBondsTotalCost = ref(0)
 const goldBondsUnrealizedPnL = ref(0)
 
-const totalDividendCashTWD = ref(0)
-const yearlyDividendSummary = ref({})
+// 分市場股利統計
+const taiwanTotalDividendTWD = ref(0)
+const taiwanYearlyDividendSummary = ref({})
+const usTotalDividendTWD = ref(0)
+const usYearlyDividendSummary = ref({})
 
 const transactions = ref([])
 const goldBondsTransactions = ref([])
@@ -71,16 +74,12 @@ const sortOption = ref('value')
 const stockTargets = ref({})
 
 const isChartOpen = ref(true)
-const isHistoryOpen = ref(true)
 const isTaiwanOpen = ref(true)
 const isTaiwanHistoryOpen = ref(false)
 const isUsOpen = ref(true)
 const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
-
-const historySearchQuery = ref('')
-const historyTypeFilter = ref('全部')
 
 const chartType = ref('line')
 const barMarketTab = ref('TW')
@@ -91,6 +90,9 @@ const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const targetFormTicker = ref('')
 const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
+
+// 編輯交易狀態
+const editingTxId = ref(null)
 
 const formData = ref({
   ticker: '',
@@ -111,7 +113,7 @@ const gbFormData = ref({
   type: '買進',
   amount: null,
   price: null,
-  marketValue: null, // 債券專選手動現價(總市值)
+  marketValue: null,
   fee: 0,
   currency: 'TWD',
   dividendCash: 0
@@ -170,14 +172,6 @@ const usTransactions = computed(() => {
   return transactions.value.filter(tx => tx.currency === 'USD')
 })
 
-const filteredHistoryTransactions = computed(() => {
-  return transactions.value.slice().reverse().filter(tx => {
-    const matchTicker = tx.ticker.toLowerCase().includes(historySearchQuery.value.toLowerCase().trim())
-    const matchType = historyTypeFilter.value === '全部' || tx.type === historyTypeFilter.value
-    return matchTicker && matchType
-  })
-})
-
 const fetchStockData = async (ticker) => {
   try {
     const targetUrl = `/yahoo/v8/finance/chart/${ticker}?interval=1d&range=1d`
@@ -210,8 +204,11 @@ const calculatePortfolio = async () => {
   const summary = {}
   let realizedTWD = 0
   let realizedUSD = 0
-  let totalDivTWD = 0
-  let yearlyDivs = {}
+
+  let twDivTotal = 0
+  let twYearlyDivs = {}
+  let usDivTotal = 0
+  let usYearlyDivs = {}
 
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
   const dailyAssetHistory = {}
@@ -245,10 +242,16 @@ const calculatePortfolio = async () => {
       if (tx.dividendCash) {
         const cashVal = Number(tx.dividendCash)
         item.totalCost -= cashVal
-        const cashInTWD = tx.currency === 'USD' ? cashVal * 32.5 : cashVal
-        totalDivTWD += cashInTWD
-        if (!yearlyDivs[year]) yearlyDivs[year] = 0
-        yearlyDivs[year] += cashInTWD
+        if (tx.currency === 'USD') {
+          const cashInTWD = cashVal * 32.5
+          usDivTotal += cashInTWD
+          if (!usYearlyDivs[year]) usYearlyDivs[year] = 0
+          usYearlyDivs[year] += cashInTWD
+        } else {
+          twDivTotal += cashVal
+          if (!twYearlyDivs[year]) twYearlyDivs[year] = 0
+          twYearlyDivs[year] += cashVal
+        }
       }
     }
 
@@ -287,9 +290,8 @@ const calculatePortfolio = async () => {
 
   goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
 
-  // 處理黃金與債券持倉
   const gbSummary = {}
-  const gbLatestMarketValue = {} // 紀錄債券最新手動填寫的現價總市值
+  const gbLatestMarketValue = {}
 
   goldBondsTransactions.value.forEach(tx => {
     if (!gbSummary[tx.name]) {
@@ -314,10 +316,10 @@ const calculatePortfolio = async () => {
         item.totalDividend += Number(tx.dividendCash)
         item.totalCost -= Number(tx.dividendCash)
         const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRate.value : Number(tx.dividendCash)
-        totalDivTWD += divTWD
+        twDivTotal += divTWD
         const yr = tx.date.split('-')[0]
-        if (!yearlyDivs[yr]) yearlyDivs[yr] = 0
-        yearlyDivs[yr] += divTWD
+        if (!twYearlyDivs[yr]) twYearlyDivs[yr] = 0
+        twYearlyDivs[yr] += divTWD
       }
       if (tx.marketValue) {
         gbLatestMarketValue[tx.name] = Number(tx.marketValue)
@@ -344,7 +346,6 @@ const calculatePortfolio = async () => {
         gbCostSum += item.totalCost
         gbValueSum += item.marketValue
       } else {
-        // 債券：使用手動填寫的現價總市值，若無則以成本當作現價
         const manualVal = gbLatestMarketValue[item.name] !== undefined ? gbLatestMarketValue[item.name] : item.totalCost
         item.marketValue = manualVal
         item.currentPrice = item.amount > 0 ? manualVal / item.amount : manualVal
@@ -369,8 +370,10 @@ const calculatePortfolio = async () => {
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
   totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRate.value)
-  totalDividendCashTWD.value = totalDivTWD
-  yearlyDividendSummary.value = yearlyDivs
+  taiwanTotalDividendTWD.value = twDivTotal
+  taiwanYearlyDividendSummary.value = twYearlyDivs
+  usTotalDividendTWD.value = usDivTotal
+  usYearlyDividendSummary.value = usYearlyDivs
 
   let totalTWD = 0
   let twTWD = 0
@@ -507,24 +510,60 @@ const loadTransactions = async () => {
 
 const saveTransaction = async () => {
   let inputTicker = formData.value.ticker.toUpperCase().trim()
-  const newTx = {
-    id: crypto.randomUUID(),
-    ticker: inputTicker,
-    date: formData.value.date,
-    type: formData.value.type,
-    shares: Number(formData.value.shares) || 0,
-    price: Number(formData.value.price) || 0,
-    fee: Number(formData.value.fee) || 0,
-    currency: formData.value.currency,
-    dividendShares: Number(formData.value.dividendShares) || 0,
-    dividendCash: Number(formData.value.dividendCash) || 0
+  if (editingTxId.value) {
+    const index = transactions.value.findIndex(tx => tx.id === editingTxId.value)
+    if (index !== -1) {
+      transactions.value[index] = {
+        ...transactions.value[index],
+        ticker: inputTicker,
+        date: formData.value.date,
+        type: formData.value.type,
+        shares: Number(formData.value.shares) || 0,
+        price: Number(formData.value.price) || 0,
+        fee: Number(formData.value.fee) || 0,
+        currency: formData.value.currency,
+        dividendShares: Number(formData.value.dividendShares) || 0,
+        dividendCash: Number(formData.value.dividendCash) || 0
+      }
+    }
+    editingTxId.value = null
+  } else {
+    const newTx = {
+      id: crypto.randomUUID(),
+      ticker: inputTicker,
+      date: formData.value.date,
+      type: formData.value.type,
+      shares: Number(formData.value.shares) || 0,
+      price: Number(formData.value.price) || 0,
+      fee: Number(formData.value.fee) || 0,
+      currency: formData.value.currency,
+      dividendShares: Number(formData.value.dividendShares) || 0,
+      dividendCash: Number(formData.value.dividendCash) || 0
+    }
+    transactions.value.push(newTx)
   }
 
-  transactions.value.push(newTx)
   await localforage.setItem(DB_KEY, JSON.parse(JSON.stringify(transactions.value)))
   showForm.value = false
   resetForm()
   await calculatePortfolio()
+}
+
+const editTransaction = (tx) => {
+  editingTxId.value = tx.id
+  formData.value = {
+    ticker: tx.ticker,
+    date: tx.date,
+    type: tx.type,
+    shares: tx.shares,
+    price: tx.price,
+    fee: tx.fee,
+    currency: tx.currency || 'TWD',
+    dividendShares: tx.dividendShares || 0,
+    dividendCash: tx.dividendCash || 0
+  }
+  selectedTickerModal.value = null
+  showForm.value = true
 }
 
 const saveGBTransaction = async () => {
@@ -634,6 +673,7 @@ const saveTargetSetting = async () => {
 }
 
 const resetForm = () => {
+  editingTxId.value = null
   formData.value = {
     ticker: '',
     date: new Date().toISOString().split('T')[0],
@@ -662,7 +702,7 @@ const resetGBForm = () => {
   }
 }
 
-const filteredTransactions = computed(() => {
+const filteredTransactionsByTicker = computed(() => {
   if (!selectedTickerModal.value) return []
   return transactions.value.filter(tx => tx.ticker === selectedTickerModal.value)
 })
@@ -767,6 +807,16 @@ onMounted(() => {
     <!-- 2. 台股子目錄 (TW) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'TW'">
+      <!-- 台股頂端股利摘要 -->
+      <div class="dividend-summary-box">
+        <p><strong>台股總累積現金股利：</strong> <span class="div-highlight">${{ taiwanTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <div class="yearly-div-list" v-if="Object.keys(taiwanYearlyDividendSummary).length > 0">
+          <small v-for="(val, yr) in taiwanYearlyDividendSummary" :key="yr" class="yearly-tag">
+            {{ yr }}年: ${{ val.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
+          </small>
+        </div>
+      </div>
+
       <div class="control-bar">
         <div class="sort-group">
           <span>排序：</span>
@@ -862,7 +912,10 @@ onMounted(() => {
                   <span v-else>配股: {{ tx.dividendShares }}股 / 現金股利: ${{ tx.dividendCash }}</span>
                 </small>
               </div>
-              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              <div style="display: flex; gap: 6px;">
+                <button @click="editTransaction(tx)" class="edit-dark-btn">修改</button>
+                <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              </div>
             </li>
           </ul>
         </div>
@@ -873,6 +926,16 @@ onMounted(() => {
     <!-- 3. 美股子目錄 (US) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'US'">
+      <!-- 美股頂端股利摘要 -->
+      <div class="dividend-summary-box">
+        <p><strong>美股總累積現金股利：</strong> <span class="div-highlight">${{ usTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <div class="yearly-div-list" v-if="Object.keys(usYearlyDividendSummary).length > 0">
+          <small v-for="(val, yr) in usYearlyDividendSummary" :key="yr" class="yearly-tag">
+            {{ yr }}年: ${{ val.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
+          </small>
+        </div>
+      </div>
+
       <div class="control-bar">
         <div class="sort-group">
           <span>排序：</span>
@@ -968,7 +1031,10 @@ onMounted(() => {
                   <span v-else>現金股利: ${{ tx.dividendCash }} USD</span>
                 </small>
               </div>
-              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              <div style="display: flex; gap: 6px;">
+                <button @click="editTransaction(tx)" class="edit-dark-btn">修改</button>
+                <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              </div>
             </li>
           </ul>
         </div>
@@ -1071,7 +1137,7 @@ onMounted(() => {
     <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
       <div class="modal-content">
-        <h3>新增紀錄</h3>
+        <h3>{{ editingTxId ? '修改紀錄' : '新增紀錄' }}</h3>
         <form @submit.prevent="saveTransaction">
           <div class="form-group"><label>代號 (台股請自帶 .TW 或 .TWO)</label><input v-model="formData.ticker" type="text" required placeholder="如 2330.TW 或 3293.TWO"></div>
           <div class="form-group"><label>日期</label><input v-model="formData.date" type="date" required></div>
@@ -1103,7 +1169,7 @@ onMounted(() => {
           </template>
 
           <div class="form-actions">
-            <button type="button" @click="showForm = false" class="cancel-btn">取消</button>
+            <button type="button" @click="showForm = false; resetForm();" class="cancel-btn">取消</button>
             <button type="submit" class="submit-btn">儲存</button>
           </div>
         </form>
@@ -1143,7 +1209,6 @@ onMounted(() => {
           <template v-if="gbFormData.type !== '配息'">
             <div class="form-group"><label>{{ gbFormData.category === '黃金' ? '克數' : '單位/股數' }}</label><input v-model="gbFormData.amount" type="number" step="any" required></div>
             <div class="form-group"><label>成交單價</label><input v-model="gbFormData.price" type="number" step="any" required></div>
-            <!-- 債券專屬：手動輸入當前現價總市值 -->
             <div class="form-group" v-if="gbFormData.category === '債券'">
               <label>當前現價總市值 (選填，更新總價)</label>
               <input v-model="gbFormData.marketValue" type="number" step="any" placeholder="例如輸入當前總市值">
@@ -1153,7 +1218,6 @@ onMounted(() => {
 
           <template v-else>
             <div class="form-group"><label>本次獲得配息金額</label><input v-model="gbFormData.dividendCash" type="number" step="any" required placeholder="0"></div>
-            <!-- 配息時也可順便更新現價總市值 -->
             <div class="form-group" v-if="gbFormData.category === '債券'">
               <label>更新當前現價總市值 (選填)</label>
               <input v-model="gbFormData.marketValue" type="number" step="any" placeholder="更新目前總市值">
@@ -1165,6 +1229,30 @@ onMounted(() => {
             <button type="submit" class="submit-btn">儲存</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- 個股歷史紀錄專屬彈窗 (點擊庫存卡片/表格時開啟，內含修改與刪除) -->
+    <div v-if="selectedTickerModal" class="modal-overlay" @click.self="selectedTickerModal = null">
+      <div class="modal-content">
+        <h3>{{ selectedTickerModal }} 歷史紀錄</h3>
+        <p v-if="filteredTransactionsByTicker.length === 0" class="empty-dark-msg">無相關紀錄。</p>
+        <ul v-else class="tx-dark-list" style="margin-top: 15px;">
+          <li v-for="tx in filteredTransactionsByTicker.slice().reverse()" :key="tx.id" class="tx-dark-item">
+            <div class="tx-info">
+              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+              <small class="tx-sub">{{ tx.date }} | 
+                <span v-if="tx.type !== '配息'">{{ tx.shares }} 股 @ ${{ tx.price }}</span>
+                <span v-else>配股: {{ tx.dividendShares }}股 / 現金: ${{ tx.dividendCash }}</span>
+              </small>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button @click="editTransaction(tx)" class="edit-dark-btn">修改</button>
+              <button @click="deleteTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </div>
+          </li>
+        </ul>
+        <button @click="selectedTickerModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
       </div>
     </div>
   </div>
@@ -1181,6 +1269,11 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .sub-assets-box { display: flex; justify-content: space-around; margin: 6px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .market-summary-item { text-align: center; flex: 1; }
 .market-summary-item:first-child { border-right: 1px solid #eee; }
+
+.dividend-summary-box { background: #fff; padding: 10px 14px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9em; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: left; }
+.div-highlight { color: #0284c7; font-weight: bold; }
+.yearly-div-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.yearly-tag { background: #f0f9ff; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; border: 1px solid #bae6fd; }
 
 .backup-toolbar { display: flex; gap: 10px; justify-content: center; }
 .backup-btn { background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: bold; text-align: center; display: inline-block; }
@@ -1230,7 +1323,8 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .tag-dark-buy { background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
 .tag-dark-sell { background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
 .tag-dark-div { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 6px; }
-.delete-dark-btn { background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+.delete-dark-btn { background: #dc2626; color: white; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+.edit-dark-btn { background: #0284c7; color: white; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
 
 .placeholder-section { background: white; padding: 30px; border-radius: 12px; text-align: center; border: 1px solid #e0e0e0; margin-top: 10px; }
 .empty-msg { color: #64748b; font-size: 0.95em; }
