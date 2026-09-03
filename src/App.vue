@@ -97,11 +97,13 @@ const showForm = ref(false)
 const showGBForm = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
+const selectedGBNameModal = ref(null) // 黃金/債券項目歷史彈窗
 const targetFormTicker = ref('')
 const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
 
 // 編輯交易狀態
 const editingTxId = ref(null)
+const editingGBTxId = ref(null)
 
 const formData = ref({
   ticker: '',
@@ -608,25 +610,63 @@ const editTransaction = (tx) => {
 }
 
 const saveGBTransaction = async () => {
-  const newTx = {
-    id: crypto.randomUUID(),
-    category: gbFormData.value.category,
-    name: gbFormData.value.name.trim(),
-    date: gbFormData.value.date,
-    type: gbFormData.value.type,
-    amount: Number(gbFormData.value.amount) || 0,
-    price: Number(gbFormData.value.price) || 0,
-    marketValue: gbFormData.value.category === '債券' ? Number(gbFormData.value.marketValue) || 0 : 0,
-    fee: Number(gbFormData.value.fee) || 0,
-    currency: gbFormData.value.currency,
-    dividendCash: Number(gbFormData.value.dividendCash) || 0
+  if (editingGBTxId.value) {
+    const index = goldBondsTransactions.value.findIndex(tx => tx.id === editingGBTxId.value)
+    if (index !== -1) {
+      goldBondsTransactions.value[index] = {
+        ...goldBondsTransactions.value[index],
+        category: gbFormData.value.category,
+        name: gbFormData.value.name.trim(),
+        date: gbFormData.value.date,
+        type: gbFormData.value.type,
+        amount: Number(gbFormData.value.amount) || 0,
+        price: Number(gbFormData.value.price) || 0,
+        marketValue: gbFormData.value.category === '債券' ? Number(gbFormData.value.marketValue) || 0 : 0,
+        fee: Number(gbFormData.value.fee) || 0,
+        currency: gbFormData.value.currency,
+        dividendCash: Number(gbFormData.value.dividendCash) || 0
+      }
+    }
+    editingGBTxId.value = null
+  } else {
+    const newTx = {
+      id: crypto.randomUUID(),
+      category: gbFormData.value.category,
+      name: gbFormData.value.name.trim(),
+      date: gbFormData.value.date,
+      type: gbFormData.value.type,
+      amount: Number(gbFormData.value.amount) || 0,
+      price: Number(gbFormData.value.price) || 0,
+      marketValue: gbFormData.value.category === '債券' ? Number(gbFormData.value.marketValue) || 0 : 0,
+      fee: Number(gbFormData.value.fee) || 0,
+      currency: gbFormData.value.currency,
+      dividendCash: Number(gbFormData.value.dividendCash) || 0
+    }
+    goldBondsTransactions.value.push(newTx)
   }
 
-  goldBondsTransactions.value.push(newTx)
   await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
   showGBForm.value = false
   resetGBForm()
   await calculatePortfolio()
+}
+
+const editGBTransaction = (tx) => {
+  editingGBTxId.value = tx.id
+  gbFormData.value = {
+    category: tx.category,
+    name: tx.name,
+    date: tx.date,
+    type: tx.type,
+    amount: tx.amount,
+    price: tx.price,
+    marketValue: tx.marketValue || 0,
+    fee: tx.fee || 0,
+    currency: tx.currency || 'TWD',
+    dividendCash: tx.dividendCash || 0
+  }
+  selectedGBNameModal.value = null
+  showGBForm.value = true
 }
 
 const deleteGBTransaction = async (id) => {
@@ -729,6 +769,7 @@ const resetForm = () => {
 }
 
 const resetGBForm = () => {
+  editingGBTxId.value = null
   gbFormData.value = {
     category: '黃金',
     name: '',
@@ -748,6 +789,11 @@ const filteredTransactionsByTicker = computed(() => {
   return transactions.value.filter(tx => tx.ticker === selectedTickerModal.value)
 })
 
+const filteredGBTransactionsByName = computed(() => {
+  if (!selectedGBNameModal.value) return []
+  return goldBondsTransactions.value.filter(tx => tx.name === selectedGBNameModal.value)
+})
+
 onMounted(() => {
   loadTransactions()
 })
@@ -760,7 +806,7 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 主導航目錄選單 (已移除銀行) -->
+      <!-- 主導航目錄選單 -->
       <div class="nav-menu-grid" style="grid-template-columns: repeat(5, 1fr);">
         <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽</button>
         <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
@@ -1109,14 +1155,15 @@ onMounted(() => {
           
           <div v-else class="card-grid">
             <div v-for="item in goldBondsPortfolioRaw" :key="item.name" class="stock-card">
-              <div class="card-header">
+              <!-- 點擊卡片標頭即可開啟該項目的各筆交易與修改/刪除彈窗 -->
+              <div class="card-header" @click="selectedGBNameModal = item.name">
                 <div>
                   <strong class="stock-name">{{ item.name }}</strong> 
                   <span class="stock-ticker">({{ item.category }})</span>
                 </div>
                 <span>{{ item.amount.toLocaleString() }} {{ item.category === '黃金' ? '克' : '單位' }}</span>
               </div>
-              <div class="card-body">
+              <div class="card-body" @click="selectedGBNameModal = item.name">
                 <p>現價/市值：${{ item.marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} {{ item.category === '黃金' ? 'TWD' : item.currency }}</p>
                 <p>成本均價：${{ item.avgCost.toFixed(2) }}</p>
                 <p v-if="item.totalDividend > 0">已領配息：${{ item.totalDividend.toLocaleString() }}</p>
@@ -1152,7 +1199,10 @@ onMounted(() => {
                   <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }} <span v-if="tx.marketValue">| 更新現價: ${{ tx.marketValue }}</span></span>
                 </small>
               </div>
-              <button @click="deleteGBTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              <div style="display: flex; gap: 6px;">
+                <button @click="editGBTransaction(tx)" class="edit-dark-btn">修改</button>
+                <button @click="deleteGBTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              </div>
             </li>
           </ul>
         </div>
@@ -1204,10 +1254,10 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 新增黃金/債券交易彈窗 -->
+    <!-- 新增/修改黃金/債券交易彈窗 -->
     <div v-if="showGBForm" class="modal-overlay">
       <div class="modal-content">
-        <h3>新增黃金/債券紀錄</h3>
+        <h3>{{ editingGBTxId ? '修改黃金/債券紀錄' : '新增黃金/債券紀錄' }}</h3>
         <form @submit.prevent="saveGBTransaction">
           <div class="form-group">
             <label>資產分類</label>
@@ -1253,7 +1303,7 @@ onMounted(() => {
           </template>
 
           <div class="form-actions">
-            <button type="button" @click="showGBForm = false" class="cancel-btn">取消</button>
+            <button type="button" @click="showGBForm = false; resetGBForm();" class="cancel-btn">取消</button>
             <button type="submit" class="submit-btn">儲存</button>
           </div>
         </form>
@@ -1281,6 +1331,30 @@ onMounted(() => {
           </li>
         </ul>
         <button @click="selectedTickerModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
+      </div>
+    </div>
+
+    <!-- 黃金/債券項目歷史紀錄專屬彈窗 (支援修改與刪除) -->
+    <div v-if="selectedGBNameModal" class="modal-overlay" @click.self="selectedGBNameModal = null">
+      <div class="modal-content">
+        <h3>{{ selectedGBNameModal }} 歷史紀錄</h3>
+        <p v-if="filteredGBTransactionsByName.length === 0" class="empty-dark-msg">無相關紀錄。</p>
+        <ul v-else class="tx-dark-list" style="margin-top: 15px;">
+          <li v-for="tx in filteredGBTransactionsByName.slice().reverse()" :key="tx.id" class="tx-dark-item">
+            <div class="tx-info">
+              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+              <small class="tx-sub">{{ tx.date }} | 
+                <span v-if="tx.type !== '配息'">{{ tx.amount }} 單位 @ ${{ tx.price }}</span>
+                <span v-else>配息: ${{ tx.dividendCash }}</span>
+              </small>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button @click="editGBTransaction(tx)" class="edit-dark-btn">修改</button>
+              <button @click="deleteGBTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </div>
+          </li>
+        </ul>
+        <button @click="selectedGBNameModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
       </div>
     </div>
   </div>
@@ -1333,7 +1407,7 @@ header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-ali
 .card-header { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.1em; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; cursor: pointer; }
 .stock-name { font-size: 1.1em; color: #111; margin-right: 6px; }
 .stock-ticker { font-size: 0.85em; color: #666; }
-.card-body p { margin: 5px 0; font-size: 0.95em; color: #555; }
+.card-body p { margin: 5px 0; font-size: 0.95em; color: #555; cursor: pointer; }
 .card-footer-action { margin-top: 10px; border-top: 1px dashed #eee; padding-top: 8px; text-align: right; }
 .target-setting-btn { background: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; }
 
