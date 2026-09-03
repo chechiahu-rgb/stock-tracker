@@ -79,7 +79,7 @@ const goldBondsPortfolioRaw = ref([])
 
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
-const exchangeRate = ref(32.5) // 保留原本供美股換算使用
+const exchangeRate = ref(32.5) 
 const goldPricePerGram = ref(4393)
 const isCalculating = ref(false)
 
@@ -223,8 +223,6 @@ const fetchExchangeRates = async () => {
       exchangeRate.value = usdtwd.price
     }
 
-    // 透過交叉匯率或 Yahoo Finance 抓取其他幣別相對於美元或台幣
-    // JPY (USDJPY=X) -> JPY per USD => TWD per JPY = (TWD=X) / (USDJPY=X)
     const usdjpy = await fetchStockData('USDJPY=X')
     if (usdjpy.price > 0 && exchangeRates.value.USD) {
       exchangeRates.value.JPY = exchangeRates.value.USD / usdjpy.price
@@ -351,7 +349,6 @@ const calculatePortfolio = async () => {
 
   goldPricePerGram.value = await fetchTaiwanBankGoldPrice()
 
-  // 處理黃金與債券
   const gbSummary = {}
   const gbLatestMarketValue = {}
 
@@ -1263,7 +1260,6 @@ onMounted(() => {
     <!-- 6. 銀行帳戶子目錄 (bank) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'bank'">
-      <!-- 頂端各幣別與總市值摘要 -->
       <div class="dividend-summary-box">
         <p><strong>銀行帳戶換算台幣總值：</strong> <span class="div-highlight">${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
         <div class="yearly-div-list" v-if="Object.keys(bankCurrenciesSummary).length > 0">
@@ -1330,9 +1326,13 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- 浮動新增按鈕 -->
-    <button @click="currentTab === 'gold_bonds' ? showGBForm = (currentTab === 'gold_bonds') : (currentTab === 'bank' ? showBankForm = true : showForm = true)" class="fab-button" v-if="currentTab !== 'funds' && currentTab !== 'overview'">+</button>
-    <button @click="showGBForm = true" class="fab-button" v-if="currentTab === 'gold_bonds'">+</button>
+    <!-- 浮動新增按鈕 (修正點擊邏輯，避免遮罩反白錯誤) -->
+    <button 
+      @click="currentTab === 'gold_bonds' ? showGBForm = true : (currentTab === 'bank' ? showBankForm = true : showForm = true)" 
+      class="fab-button" 
+      v-if="currentTab !== 'funds' && currentTab !== 'overview'">
+      +
+    </button>
 
     <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
