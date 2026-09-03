@@ -1259,7 +1259,7 @@ onMounted(() => {
     <!-- ========================================== -->
     <!-- 6. 銀行帳戶子目錄 (bank) -->
     <!-- ========================================== -->
-    <main v-if="currentTab === 'bank'">
+    <div v-if="currentTab === 'bank'">
       <div class="dividend-summary-box">
         <p><strong>銀行帳戶換算台幣總值：</strong> <span class="div-highlight">${{ bankAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
         <div class="yearly-div-list" v-if="Object.keys(bankCurrenciesSummary).length > 0">
@@ -1324,9 +1324,9 @@ onMounted(() => {
           </ul>
         </div>
       </section>
-    </main>
+    </div>
 
-    <!-- 浮動新增按鈕 (修正點擊邏輯，避免遮罩反白錯誤) -->
+    <!-- 浮動新增按鈕 -->
     <button 
       @click="currentTab === 'gold_bonds' ? showGBForm = true : (currentTab === 'bank' ? showBankForm = true : showForm = true)" 
       class="fab-button" 
