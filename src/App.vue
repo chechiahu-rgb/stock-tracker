@@ -108,7 +108,6 @@ const showBankForm = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const selectedGBNameModal = ref(null)
-const selectedBankIdModal = ref(null) // 銀行項目修改彈窗
 const targetFormTicker = ref('')
 const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
 
@@ -916,7 +915,7 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 主導航目錄選單 (包含銀行) -->
+      <!-- 主導航目錄選單 (完美對應 6 個選項的 Grid 網格) -->
       <div class="nav-menu-grid" style="grid-template-columns: repeat(6, 1fr);">
         <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽</button>
         <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
@@ -1334,6 +1333,7 @@ onMounted(() => {
             (折合NTD: ${{ Math.round(amt * (exchangeRates.value[cur] || 1)).toLocaleString() }})
           </small>
         </div>
+        <p v-else style="color: #64748b; font-size: 0.9em; margin-top: 5px;">目前尚無登錄任何銀行或外幣活存/定存帳戶。</p>
       </div>
 
       <section class="portfolio">
@@ -1345,7 +1345,7 @@ onMounted(() => {
         </div>
 
         <div v-show="isBankOpen">
-          <p v-if="bankPortfolioRaw.length === 0" class="empty-msg">目前無銀行帳戶資料。</p>
+          <p v-if="bankPortfolioRaw.length === 0" class="empty-msg">目前無銀行帳戶資料，請點擊右下角「+」新增帳戶。</p>
           
           <div v-else class="card-grid">
             <div v-for="acc in bankPortfolioRaw" :key="acc.id" class="stock-card">
@@ -1590,7 +1590,7 @@ onMounted(() => {
 header { background-color: #f4f4f5; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 15px; }
 
 .nav-menu-grid { display: grid; gap: 6px; margin-top: 15px; }
-.nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 2px; border-radius: 8px; font-weight: bold; font-size: 0.85em; cursor: pointer; transition: 0.2s; }
+.nav-btn { background: #fff; border: 1px solid #cbd5e1; color: #334155; padding: 10px 2px; border-radius: 8px; font-weight: bold; font-size: 0.8em; cursor: pointer; transition: 0.2s; }
 .nav-btn.active-nav { background: #007aff; color: #fff; border-color: #007aff; box-shadow: 0 2px 6px rgba(0,122,255,0.3); }
 
 .sub-assets-box { display: flex; justify-content: space-around; margin: 6px 0; font-size: 0.95em; color: #333; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
