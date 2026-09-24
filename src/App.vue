@@ -47,17 +47,19 @@ const fundsAssetsTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
 const taiwanUnrealizedPnL = ref(0)
-const taiwanRealizedPnLTWD = ref(0) // 新增：台股已實現損益 (TWD)
+const taiwanRealizedPnLTWD = ref(0)
 
 const usTotalCost = ref(0)
 const usUnrealizedPnL = ref(0)
-const usRealizedPnLUSD = ref(0) // 新增：美股已實現損益 (USD)
+const usRealizedPnLUSD = ref(0)
 
 const goldBondsTotalCost = ref(0)
 const goldBondsUnrealizedPnL = ref(0)
 
 const fundsTotalCost = ref(0)
 const fundsUnrealizedPnL = ref(0)
+const fundsRealizedPnLTWD = ref(0) // 新增：基金已實現損益 (TWD)
+const fundsTotalDividendTWD = ref(0) // 新增：基金累積配息 (TWD)
 
 // 分市場股利統計
 const taiwanTotalDividendTWD = ref(0)
@@ -93,14 +95,21 @@ const sortOption = ref('value')
 
 const stockTargets = ref({})
 
+// 展開 / 收起 控制變數
 const isChartOpen = ref(true)
 const isTaiwanOpen = ref(true)
+const isTaiwanClosedOpen = ref(true) // 新增：台股已結清區塊展開控制
 const isTaiwanHistoryOpen = ref(false)
+
 const isUsOpen = ref(true)
+const isUsClosedOpen = ref(true) // 新增：美股已結清區塊展開控制
 const isUsHistoryOpen = ref(false)
+
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
+
 const isFundsOpen = ref(true)
+const isFundsClosedOpen = ref(true) // 新增：基金已結清區塊展開控制
 const isFundsHistoryOpen = ref(false)
 
 const chartType = ref('line')
@@ -302,6 +311,51 @@ const usClosedPortfolio = computed(() => {
   return closed
 })
 
+// 篩選已結清（單位數為0，但有交易記錄）的基金標的
+const fundsClosedPortfolio = computed(() => {
+  const allNames = [...new Set(fundsTransactions.value.map(tx => tx.name))]
+  const closed = []
+
+  allNames.forEach(name => {
+    const txs = fundsTransactions.value.filter(t => t.name === name)
+    let units = 0
+    let totalCost = 0
+    let realizedPnL = 0
+    let totalSellAmount = 0
+
+    txs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(tx => {
+      const rate = exchangeRates.value[tx.currency] || 1
+      if (tx.type === '買進') {
+        units += Number(tx.units)
+        totalCost += ((Number(tx.price) * Number(tx.units)) + (Number(tx.fee) || 0)) * rate
+      } else if (tx.type === '賣出' && units > 0) {
+        const avgCost = totalCost / units
+        const sellUnits = Number(tx.units)
+        const costOfSold = avgCost * sellUnits
+        const revenue = ((Number(tx.price) * sellUnits) - (Number(tx.fee) || 0)) * rate
+        
+        realizedPnL += (revenue - costOfSold)
+        totalSellAmount += revenue
+        
+        units -= sellUnits
+        totalCost -= costOfSold
+        if (units <= 0) { units = 0; totalCost = 0; }
+      }
+    })
+
+    if (units === 0 && txs.length > 0) {
+      closed.push({
+        name,
+        txCount: txs.length,
+        totalSellAmount,
+        realizedPnL
+      })
+    }
+  })
+
+  return closed
+})
+
 const taiwanTransactions = computed(() => {
   return transactions.value.filter(tx => !tx.currency || tx.currency === 'TWD')
 })
@@ -448,7 +502,6 @@ const calculatePortfolio = async () => {
     }
   })
 
-  // 分別指定給台股與美股各自的已實現損益變數
   taiwanRealizedPnLTWD.value = realizedTWD
   usRealizedPnLUSD.value = realizedUSD
 
@@ -551,9 +604,46 @@ const calculatePortfolio = async () => {
   goldBondsTotalCost.value = gbCostSum
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
-  // --- 基金庫存統計邏輯 ---
+  // --- 基金庫存與已實現損益統計邏輯 ---
   const fundSummary = {}
   const fundLatestNAV = {}
+  let fRealizedTWD = 0
+  let fDividendTWD = 0
+
+  const sortedFundsTx = [...fundsTransactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
+  let runningFundSummary = {}
+
+  sortedFundsTx.forEach(tx => {
+    const rate = exchangeRates.value[tx.currency] || 1
+    if (!runningFundSummary[tx.name]) {
+      runningFundSummary[tx.name] = { units: 0, totalCostTWD: 0 }
+    }
+    const item = runningFundSummary[tx.name]
+
+    if (tx.type === '買進') {
+      item.units += Number(tx.units)
+      item.totalCostTWD += ((Number(tx.price) * Number(tx.units)) + Number(tx.fee || 0)) * rate
+    } else if (tx.type === '賣出' && item.units > 0) {
+      const avgCostPerUnit = item.totalCostTWD / item.units
+      const sellUnits = Number(tx.units)
+      const costOfSold = avgCostPerUnit * sellUnits
+      const revenue = ((Number(tx.price) * sellUnits) - Number(tx.fee || 0)) * rate
+      const realizedPnL = revenue - costOfSold
+
+      fRealizedTWD += realizedPnL
+
+      item.units -= sellUnits
+      item.totalCostTWD -= costOfSold
+      if (item.units <= 0) { item.units = 0; item.totalCostTWD = 0; }
+    } else if (tx.type === '配息') {
+      if (tx.dividendCash) {
+        fDividendTWD += Number(tx.dividendCash) * rate
+      }
+    }
+  })
+
+  fundsRealizedPnLTWD.value = fRealizedTWD
+  fundsTotalDividendTWD.value = fDividendTWD
 
   fundsTransactions.value.forEach(tx => {
     if (!fundSummary[tx.name]) {
@@ -681,7 +771,6 @@ const calculatePortfolio = async () => {
     }
   }
 
-  // 總資產整合：台股 + 美股 + 黃金債券 + 基金
   totalTWD = twTWD + usTWD + gbTWD + fTWD
 
   taiwanPortfolioRaw.value = twList
@@ -695,14 +784,12 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  // 紀錄當日真實淨資產快照並繪製折線圖
   await recordAndRenderDailyAssetHistory(totalTWD)
 
   updateBarChartData()
   isCalculating.value = false
 }
 
-// 紀錄當日真實資產總市值快照並繪製折線圖
 const recordAndRenderDailyAssetHistory = async (currentTotalTWD) => {
   const todayStr = new Date().toISOString().split('T')[0]
   let snapshots = (await localforage.getItem(DAILY_ASSET_DB_KEY)) || {}
@@ -1253,7 +1340,7 @@ onMounted(() => {
     </div>
 
     <!-- ========================================== -->
-    <!-- 2. 台股子目錄 (TW) - 新增台股已實現損益 -->
+    <!-- 2. 台股子目錄 (TW) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'TW'">
       <div class="dividend-summary-box">
@@ -1351,33 +1438,39 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 台股已結清股票區塊 -->
+      <!-- 台股已結清股票區塊 (加入展開/收起功能) -->
       <section class="portfolio" style="margin-top: 20px;">
         <div class="chart-header-row" style="margin-bottom: 12px;">
           <h3 style="margin: 0; color: #64748b;">台股已結清股票 (已未持股)</h3>
+          <button @click="isTaiwanClosedOpen = !isTaiwanClosedOpen" class="toggle-chart-btn">
+            {{ isTaiwanClosedOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
-        <div class="table-container">
-          <p v-if="taiwanClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清台股。</p>
-          <table v-else class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>交易次數</th>
-                <th>總賣出金額 (TWD)</th>
-                <th>已實現損益 (TWD)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in taiwanClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
-                <td><strong>{{ stock.ticker }}</strong></td>
-                <td>{{ stock.txCount }} 次</td>
-                <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</td>
-                <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        
+        <div v-show="isTaiwanClosedOpen">
+          <div class="table-container">
+            <p v-if="taiwanClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清台股。</p>
+            <table v-else class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>交易次數</th>
+                  <th>總賣出金額 (TWD)</th>
+                  <th>已實現損益 (TWD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in taiwanClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                  <td><strong>{{ stock.ticker }}</strong></td>
+                  <td>{{ stock.txCount }} 次</td>
+                  <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</td>
+                  <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1414,7 +1507,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 3. 美股子目錄 (US) - 新增美股已實現損益 -->
+    <!-- 3. 美股子目錄 (US) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'US'">
       <div class="dividend-summary-box">
@@ -1513,33 +1606,39 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 美股已結清股票區塊 -->
+      <!-- 美股已結清股票區塊 (加入展開/收起功能) -->
       <section class="portfolio" style="margin-top: 20px;">
         <div class="chart-header-row" style="margin-bottom: 12px;">
           <h3 style="margin: 0; color: #64748b;">美股已結清股票 (已未持股)</h3>
+          <button @click="isUsClosedOpen = !isUsClosedOpen" class="toggle-chart-btn">
+            {{ isUsClosedOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
         </div>
-        <div class="table-container">
-          <p v-if="usClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清美股。</p>
-          <table v-else class="stock-table">
-            <thead>
-              <tr>
-                <th>標的</th>
-                <th>交易次數</th>
-                <th>總賣出金額 (USD)</th>
-                <th>已實現損益 (USD)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in usClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
-                <td><strong>{{ stock.ticker }}</strong></td>
-                <td>{{ stock.txCount }} 次</td>
-                <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}</td>
-                <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
-                  ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        
+        <div v-show="isUsClosedOpen">
+          <div class="table-container">
+            <p v-if="usClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清美股。</p>
+            <table v-else class="stock-table">
+              <thead>
+                <tr>
+                  <th>標的</th>
+                  <th>交易次數</th>
+                  <th>總賣出金額 (USD)</th>
+                  <th>已實現損益 (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in usClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                  <td><strong>{{ stock.ticker }}</strong></td>
+                  <td>{{ stock.txCount }} 次</td>
+                  <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}</td>
+                  <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1576,12 +1675,21 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 4. 基金子目錄 (funds) -->
+    <!-- 4. 基金子目錄 (funds) - 含已實現損益與已結清區塊 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'funds'">
+      <div class="dividend-summary-box">
+        <p><strong>基金累積配息：</strong> <span class="div-highlight">${{ fundsTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <p style="margin-top: 6px;"><strong>基金累積已實現損益：</strong> 
+          <span :class="fundsRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
+            ${{ fundsRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD
+          </span>
+        </p>
+      </div>
+
       <section class="portfolio">
         <div class="chart-header-row" style="margin-bottom: 12px;">
-          <h3 style="margin: 0;">🌐 基金資產管理</h3>
+          <h3 style="margin: 0;">🌐 基金持倉庫存</h3>
           <button @click="isFundsOpen = !isFundsOpen" class="toggle-chart-btn">
             {{ isFundsOpen ? '收起 🔼' : '展開 🔽' }}
           </button>
@@ -1611,6 +1719,42 @@ onMounted(() => {
                 <button @click="openNavUpdateModal(item.name)" class="target-setting-btn">更新最新淨值 (NAV)</button>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 基金已結清區塊 (加入展開/收起功能) -->
+      <section class="portfolio" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0; color: #64748b;">基金已結清 (已未持有)</h3>
+          <button @click="isFundsClosedOpen = !isFundsClosedOpen" class="toggle-chart-btn">
+            {{ isFundsClosedOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isFundsClosedOpen">
+          <div class="table-container">
+            <p v-if="fundsClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清基金。</p>
+            <table v-else class="stock-table">
+              <thead>
+                <tr>
+                  <th>基金名稱</th>
+                  <th>交易次數</th>
+                  <th>總贖回金額 (TWD)</th>
+                  <th>已實現損益 (TWD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="fund in fundsClosedPortfolio" :key="fund.name" @click="selectedFundNameModal = fund.name">
+                  <td><strong>{{ fund.name }}</strong></td>
+                  <td>{{ fund.txCount }} 次</td>
+                  <td>${{ fund.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</td>
+                  <td :class="fund.realizedPnL >= 0 ? 'profit' : 'loss'">
+                    ${{ fund.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
