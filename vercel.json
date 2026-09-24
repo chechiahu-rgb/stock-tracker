@@ -3,6 +3,14 @@
     {
       "source": "/yahoo/:path*",
       "destination": "https://query1.finance.yahoo.com/:path*"
+    },
+    {
+      "source": "/fundrich-api/:path*",
+      "destination": "https://www.fundrich.com.tw/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
