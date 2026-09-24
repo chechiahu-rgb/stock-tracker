@@ -35,6 +35,7 @@ localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
 const GB_DB_KEY = 'gold_bonds_records'
+const DAILY_ASSET_DB_KEY = 'daily_asset_snapshots' // 新增：每日資產快照紀錄
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
@@ -176,7 +177,7 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
-// 需求 3：篩選已結清（股數為0，但有交易記錄）的台股標的
+// 修正：篩選已結清（股數為0，但有交易記錄）的台股標的，正確計算已實現損益
 const taiwanClosedPortfolio = computed(() => {
   const allTickers = [...new Set(taiwanTransactions.value.map(tx => tx.ticker))]
   const closed = []
@@ -190,19 +191,23 @@ const taiwanClosedPortfolio = computed(() => {
 
     txs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(tx => {
       if (tx.type === '買進') {
-        shares += tx.shares
-        totalCost += (tx.price * tx.shares) + (tx.fee || 0)
+        shares += Number(tx.shares)
+        totalCost += (Number(tx.price) * Number(tx.shares)) + (Number(tx.fee) || 0)
       } else if (tx.type === '賣出' && shares > 0) {
         const avgCost = totalCost / shares
-        const sellCost = avgCost * tx.shares
-        const revenue = (tx.price * tx.shares) - (tx.fee || 0)
-        realizedPnL += (revenue - sellCost)
+        const sellShares = Number(tx.shares)
+        const costOfSold = avgCost * sellShares
+        const revenue = (Number(tx.price) * sellShares) - (Number(tx.fee) || 0)
+        
+        realizedPnL += (revenue - costOfSold)
         totalSellAmount += revenue
-        shares -= tx.shares
-        totalCost -= sellCost
+        
+        shares -= sellShares
+        totalCost -= costOfSold
+        if (shares <= 0) { shares = 0; totalCost = 0; }
       } else if (tx.type === '配息') {
         if (tx.dividendShares) shares += Number(tx.dividendShares)
-        if (tx.dividendCash) totalCost -= Number(tx.dividendCash)
+        // 配息不扣減持股總成本，維持真實資本利得計算
       }
     })
 
@@ -219,7 +224,7 @@ const taiwanClosedPortfolio = computed(() => {
   return closed
 })
 
-// 需求 3：篩選已結清（股數為0，但有交易記錄）的美股標的
+// 修正：篩選已結清（股數為0，但有交易記錄）的美股標的，正確計算已實現損益
 const usClosedPortfolio = computed(() => {
   const allTickers = [...new Set(usTransactions.value.map(tx => tx.ticker))]
   const closed = []
@@ -233,19 +238,23 @@ const usClosedPortfolio = computed(() => {
 
     txs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(tx => {
       if (tx.type === '買進') {
-        shares += tx.shares
-        totalCost += (tx.price * tx.shares) + (tx.fee || 0)
+        shares += Number(tx.shares)
+        totalCost += (Number(tx.price) * Number(tx.shares)) + (Number(tx.fee) || 0)
       } else if (tx.type === '賣出' && shares > 0) {
         const avgCost = totalCost / shares
-        const sellCost = avgCost * tx.shares
-        const revenue = (tx.price * tx.shares) - (tx.fee || 0)
-        realizedPnL += (revenue - sellCost)
+        const sellShares = Number(tx.shares)
+        const costOfSold = avgCost * sellShares
+        const revenue = (Number(tx.price) * sellShares) - (Number(tx.fee) || 0)
+        
+        realizedPnL += (revenue - costOfSold)
         totalSellAmount += revenue
-        shares -= tx.shares
-        totalCost -= sellCost
+        
+        shares -= sellShares
+        totalCost -= costOfSold
+        if (shares <= 0) { shares = 0; totalCost = 0; }
       } else if (tx.type === '配息') {
         if (tx.dividendShares) shares += Number(tx.dividendShares)
-        if (tx.dividendCash) totalCost -= Number(tx.dividendCash)
+        // 配息不扣減持股總成本，維持真實資本利得計算
       }
     })
 
@@ -330,7 +339,7 @@ const fetchTaiwanBankGoldPrice = async () => {
   }
 }
 
-// 需求 1：每天晚上 21:00 自動刷新數據並重新繪圖的定時排程
+// 每天晚上 21:00 自動刷新數據並重新繪圖的定時排程
 const setupDailyAutoUpdate = () => {
   const now = new Date()
   const targetTime = new Date()
@@ -364,9 +373,9 @@ const calculatePortfolio = async () => {
   let usYearlyDivs = {}
 
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
-  const dailyAssetHistory = {}
   let runningSummary = {}
 
+  // 1. 正確計算已實現損益與累積股利
   sortedTx.forEach(tx => {
     const year = tx.date ? tx.date.split('-')[0] : '未知年份'
     if (!runningSummary[tx.ticker]) {
@@ -375,13 +384,13 @@ const calculatePortfolio = async () => {
     const item = runningSummary[tx.ticker]
 
     if (tx.type === '買進') {
-      item.shares += tx.shares
-      item.totalCost += (tx.price * tx.shares) + tx.fee
+      item.shares += Number(tx.shares)
+      item.totalCost += (Number(tx.price) * Number(tx.shares)) + Number(tx.fee || 0)
     } else if (tx.type === '賣出' && item.shares > 0) {
       const avgCostPerShare = item.totalCost / item.shares
-      const sellShares = tx.shares
+      const sellShares = Number(tx.shares)
       const costOfSold = avgCostPerShare * sellShares
-      const revenue = (tx.price * sellShares) - tx.fee
+      const revenue = (Number(tx.price) * sellShares) - Number(tx.fee || 0)
       const realizedPnL = revenue - costOfSold
 
       if (item.currency === 'USD') realizedUSD += realizedPnL
@@ -394,7 +403,7 @@ const calculatePortfolio = async () => {
       if (tx.dividendShares) item.shares += Number(tx.dividendShares)
       if (tx.dividendCash) {
         const cashVal = Number(tx.dividendCash)
-        item.totalCost -= cashVal
+        // 股利不扣減持股成本，避免算出的資本利得失真
         if (tx.currency === 'USD') {
           const cashInTWD = cashVal * exchangeRates.value.USD
           usDivTotal += cashInTWD
@@ -407,35 +416,24 @@ const calculatePortfolio = async () => {
         }
       }
     }
-
-    // 計算當日總投入成本作為圖表基礎
-    let dayTotalCost = 0
-    for (const t in runningSummary) {
-      const st = runningSummary[t]
-      if (st.shares > 0) {
-        let val = st.totalCost
-        if (st.currency === 'USD') val *= exchangeRates.value.USD
-        dayTotalCost += val
-      }
-    }
-    dailyAssetHistory[tx.date] = dayTotalCost
   })
 
+  // 2. 統計當前持股庫存
   sortedTx.forEach(tx => {
     if (!summary[tx.ticker]) {
       summary[tx.ticker] = { ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency }
     }
     const item = summary[tx.ticker]
     if (tx.type === '買進') {
-      item.shares += tx.shares
-      item.totalCost += (tx.price * tx.shares) + tx.fee
+      item.shares += Number(tx.shares)
+      item.totalCost += (Number(tx.price) * Number(tx.shares)) + Number(tx.fee || 0)
     } else if (tx.type === '賣出' && item.shares > 0) {
       const avgCost = item.totalCost / item.shares
-      item.shares -= tx.shares
-      item.totalCost -= avgCost * tx.shares
+      item.shares -= Number(tx.shares)
+      item.totalCost -= avgCost * Number(tx.shares)
+      if (item.shares <= 0) { item.shares = 0; item.totalCost = 0; }
     } else if (tx.type === '配息') {
       if (tx.dividendShares) item.shares += Number(tx.dividendShares)
-      if (tx.dividendCash) item.totalCost -= Number(tx.dividendCash)
     }
   })
 
@@ -450,22 +448,21 @@ const calculatePortfolio = async () => {
     }
     const item = gbSummary[tx.name]
     if (tx.type === '買進') {
-      item.amount += tx.amount
-      item.totalCost += (tx.price * tx.amount) + tx.fee
+      item.amount += Number(tx.amount)
+      item.totalCost += (Number(tx.price) * Number(tx.amount)) + Number(tx.fee || 0)
       if (item.category === '債券' && tx.marketValue) {
         gbLatestMarketValue[tx.name] = Number(tx.marketValue)
       }
     } else if (tx.type === '賣出' && item.amount > 0) {
       const avgCost = item.totalCost / item.amount
-      item.amount -= tx.amount
-      item.totalCost -= avgCost * tx.amount
+      item.amount -= Number(tx.amount)
+      item.totalCost -= avgCost * Number(tx.amount)
       if (item.category === '債券' && tx.marketValue) {
         gbLatestMarketValue[tx.name] = Number(tx.marketValue)
       }
     } else if (tx.type === '配息') {
       if (tx.dividendCash) {
         item.totalDividend += Number(tx.dividendCash)
-        item.totalCost -= Number(tx.dividendCash)
         const divTWD = tx.currency === 'USD' ? Number(tx.dividendCash) * exchangeRates.value.USD : Number(tx.dividendCash)
         twDivTotal += divTWD
         const yr = tx.date.split('-')[0]
@@ -585,36 +582,39 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  // 需求 1：修正資產折線圖數據處理與即時總值掛載
-  const labels = Object.keys(dailyAssetHistory).sort((a, b) => new Date(a) - new Date(b))
-  const dataValues = labels.map(date => dailyAssetHistory[date])
+  // 3. 重構：紀錄每日真實淨資產快照並繪製資產折線圖
+  await recordAndRenderDailyAssetHistory(totalTWD)
+
+  updateBarChartData()
+  isCalculating.value = false
+}
+
+// 新增：紀錄當日真實資產總市值快照並繪製折線圖
+const recordAndRenderDailyAssetHistory = async (currentTotalTWD) => {
   const todayStr = new Date().toISOString().split('T')[0]
-  
-  if (labels.length > 0) {
-    if (labels.includes(todayStr)) {
-      const todayIndex = labels.indexOf(todayStr)
-      dataValues[todayIndex] = totalTWD
-    } else {
-      labels.push(todayStr)
-      dataValues.push(totalTWD)
-    }
+  let snapshots = (await localforage.getItem(DAILY_ASSET_DB_KEY)) || {}
+
+  // 更新今天的市值快照（單位：TWD）
+  if (currentTotalTWD > 0) {
+    snapshots[todayStr] = Math.round(currentTotalTWD)
+    await localforage.setItem(DAILY_ASSET_DB_KEY, JSON.parse(JSON.stringify(snapshots)))
   }
 
+  const sortedDates = Object.keys(snapshots).sort((a, b) => new Date(a) - new Date(b))
+  const chartValues = sortedDates.map(date => snapshots[date])
+
   lineChartData.value = {
-    labels: labels,
+    labels: sortedDates,
     datasets: [{
       label: '總資產市值走勢 (TWD)',
       backgroundColor: 'rgba(0, 122, 255, 0.1)',
       borderColor: '#007aff',
       borderWidth: 2,
-      data: dataValues,
+      data: chartValues,
       fill: true,
       tension: 0.2
     }]
   }
-
-  updateBarChartData()
-  isCalculating.value = false
 }
 
 const updateBarChartData = () => {
@@ -792,11 +792,13 @@ const deleteTransaction = async (id) => {
   await calculatePortfolio()
 }
 
-const exportBackup = () => {
+const exportBackup = async () => {
+  const snapshots = (await localforage.getItem(DAILY_ASSET_DB_KEY)) || {}
   const backupData = {
     transactions: transactions.value,
     goldBondsTransactions: goldBondsTransactions.value,
     stockTargets: stockTargets.value,
+    dailyAssetSnapshots: snapshots,
     exportDate: new Date().toISOString()
   }
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2))
@@ -832,6 +834,9 @@ const importBackup = async (event) => {
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
         await localforage.setItem(TARGET_DB_KEY, JSON.parse(JSON.stringify(stockTargets.value)))
+      }
+      if (content.dailyAssetSnapshots) {
+        await localforage.setItem(DAILY_ASSET_DB_KEY, JSON.parse(JSON.stringify(content.dailyAssetSnapshots)))
       }
       await calculatePortfolio()
       alert('資料還原成功！')
@@ -907,7 +912,7 @@ const filteredGBTransactionsByName = computed(() => {
 
 onMounted(() => {
   loadTransactions()
-  setupDailyAutoUpdate() // 需求 1：啟動每日晚上 21:00 定時更新
+  setupDailyAutoUpdate() // 啟動每日晚上 21:00 定時更新
 })
 </script>
 
@@ -918,7 +923,7 @@ onMounted(() => {
       <h2 v-if="!isCalculating">總市值：${{ totalAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</h2>
       <h2 v-else>結算中...</h2>
 
-      <!-- 主導航目錄選單 (恢復為 5 個核心目錄) -->
+      <!-- 主導航目錄選單 -->
       <div class="nav-menu-grid" style="grid-template-columns: repeat(5, 1fr);">
         <button :class="['nav-btn', currentTab === 'overview' ? 'active-nav' : '']" @click="currentTab = 'overview'">🏠 總覽</button>
         <button :class="['nav-btn', currentTab === 'TW' ? 'active-nav' : '']" @click="currentTab = 'TW'">📈 台股</button>
@@ -964,7 +969,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 需求 2：加入已實現損益統計區塊 -->
       <div class="sub-assets-box" style="margin-top: 8px;">
         <div class="market-summary-item">
           <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
@@ -1105,7 +1109,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 需求 3：台股已結清股票區塊 -->
+      <!-- 台股已結清股票區塊 -->
       <section class="portfolio" style="margin-top: 20px;">
         <div class="chart-header-row" style="margin-bottom: 12px;">
           <h3 style="margin: 0; color: #64748b;">台股已結清股票 (已未持股)</h3>
@@ -1261,7 +1265,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 需求 3：美股已結清股票區塊 -->
+      <!-- 美股已結清股票區塊 -->
       <section class="portfolio" style="margin-top: 20px;">
         <div class="chart-header-row" style="margin-bottom: 12px;">
           <h3 style="margin: 0; color: #64748b;">美股已結清股票 (已未持股)</h3>
