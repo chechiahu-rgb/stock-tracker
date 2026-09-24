@@ -176,6 +176,92 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
+// 需求 3：篩選已結清（股數為0，但有交易記錄）的台股標的
+const taiwanClosedPortfolio = computed(() => {
+  const allTickers = [...new Set(taiwanTransactions.value.map(tx => tx.ticker))]
+  const closed = []
+
+  allTickers.forEach(ticker => {
+    const txs = taiwanTransactions.value.filter(t => t.ticker === ticker)
+    let shares = 0
+    let totalCost = 0
+    let realizedPnL = 0
+    let totalSellAmount = 0
+
+    txs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(tx => {
+      if (tx.type === '買進') {
+        shares += tx.shares
+        totalCost += (tx.price * tx.shares) + (tx.fee || 0)
+      } else if (tx.type === '賣出' && shares > 0) {
+        const avgCost = totalCost / shares
+        const sellCost = avgCost * tx.shares
+        const revenue = (tx.price * tx.shares) - (tx.fee || 0)
+        realizedPnL += (revenue - sellCost)
+        totalSellAmount += revenue
+        shares -= tx.shares
+        totalCost -= sellCost
+      } else if (tx.type === '配息') {
+        if (tx.dividendShares) shares += Number(tx.dividendShares)
+        if (tx.dividendCash) totalCost -= Number(tx.dividendCash)
+      }
+    })
+
+    if (shares === 0 && txs.length > 0) {
+      closed.push({
+        ticker,
+        txCount: txs.length,
+        totalSellAmount,
+        realizedPnL
+      })
+    }
+  })
+
+  return closed
+})
+
+// 需求 3：篩選已結清（股數為0，但有交易記錄）的美股標的
+const usClosedPortfolio = computed(() => {
+  const allTickers = [...new Set(usTransactions.value.map(tx => tx.ticker))]
+  const closed = []
+
+  allTickers.forEach(ticker => {
+    const txs = usTransactions.value.filter(t => t.ticker === ticker)
+    let shares = 0
+    let totalCost = 0
+    let realizedPnL = 0
+    let totalSellAmount = 0
+
+    txs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(tx => {
+      if (tx.type === '買進') {
+        shares += tx.shares
+        totalCost += (tx.price * tx.shares) + (tx.fee || 0)
+      } else if (tx.type === '賣出' && shares > 0) {
+        const avgCost = totalCost / shares
+        const sellCost = avgCost * tx.shares
+        const revenue = (tx.price * tx.shares) - (tx.fee || 0)
+        realizedPnL += (revenue - sellCost)
+        totalSellAmount += revenue
+        shares -= tx.shares
+        totalCost -= sellCost
+      } else if (tx.type === '配息') {
+        if (tx.dividendShares) shares += Number(tx.dividendShares)
+        if (tx.dividendCash) totalCost -= Number(tx.dividendCash)
+      }
+    })
+
+    if (shares === 0 && txs.length > 0) {
+      closed.push({
+        ticker,
+        txCount: txs.length,
+        totalSellAmount,
+        realizedPnL
+      })
+    }
+  })
+
+  return closed
+})
+
 const taiwanTransactions = computed(() => {
   return transactions.value.filter(tx => !tx.currency || tx.currency === 'TWD')
 })
@@ -244,6 +330,26 @@ const fetchTaiwanBankGoldPrice = async () => {
   }
 }
 
+// 需求 1：每天晚上 21:00 自動刷新數據並重新繪圖的定時排程
+const setupDailyAutoUpdate = () => {
+  const now = new Date()
+  const targetTime = new Date()
+  targetTime.setHours(21, 0, 0, 0)
+
+  if (now >= targetTime) {
+    targetTime.setDate(targetTime.getDate() + 1)
+  }
+
+  const timeUntil21PM = targetTime.getTime() - now.getTime()
+
+  setTimeout(() => {
+    calculatePortfolio()
+    setInterval(() => {
+      calculatePortfolio()
+    }, 24 * 60 * 60 * 1000)
+  }, timeUntil21PM)
+}
+
 const calculatePortfolio = async () => {
   isCalculating.value = true
   await fetchExchangeRates()
@@ -302,6 +408,7 @@ const calculatePortfolio = async () => {
       }
     }
 
+    // 計算當日總投入成本作為圖表基礎
     let dayTotalCost = 0
     for (const t in runningSummary) {
       const st = runningSummary[t]
@@ -478,16 +585,19 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  const labels = Object.keys(dailyAssetHistory)
-  const dataValues = Object.values(dailyAssetHistory)
+  // 需求 1：修正資產折線圖數據處理與即時總值掛載
+  const labels = Object.keys(dailyAssetHistory).sort((a, b) => new Date(a) - new Date(b))
+  const dataValues = labels.map(date => dailyAssetHistory[date])
   const todayStr = new Date().toISOString().split('T')[0]
   
-  if (labels.includes(todayStr)) {
-    const todayIndex = labels.indexOf(todayStr)
-    dataValues[todayIndex] = totalTWD
-  } else if (totalTWD > 0) {
-    labels.push(todayStr)
-    dataValues.push(totalTWD)
+  if (labels.length > 0) {
+    if (labels.includes(todayStr)) {
+      const todayIndex = labels.indexOf(todayStr)
+      dataValues[todayIndex] = totalTWD
+    } else {
+      labels.push(todayStr)
+      dataValues.push(totalTWD)
+    }
   }
 
   lineChartData.value = {
@@ -797,6 +907,7 @@ const filteredGBTransactionsByName = computed(() => {
 
 onMounted(() => {
   loadTransactions()
+  setupDailyAutoUpdate() // 需求 1：啟動每日晚上 21:00 定時更新
 })
 </script>
 
@@ -853,8 +964,9 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- 需求 2：加入已實現損益統計區塊 -->
       <div class="sub-assets-box" style="margin-top: 8px;">
-        <div class="market-summary-item" style="border: none;">
+        <div class="market-summary-item">
           <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
           <br>
           <small>未實現：
@@ -864,10 +976,19 @@ onMounted(() => {
             </strong>
           </small>
         </div>
+        <div class="market-summary-item">
+          <span>已實現總損益</span>
+          <br>
+          <small>損益：
+            <strong :class="totalRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
+              ${{ totalRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD
+            </strong>
+          </small>
+        </div>
       </div>
 
       <!-- 圖表區塊 -->
-      <section class="chart-section">
+      <section class="chart-section" style="margin-top: 15px;">
         <div class="chart-header-row">
           <div class="chart-type-selector">
             <button :class="['type-btn', chartType === 'line' ? 'active-type' : '']" @click="chartType = 'line'">資產折線圖</button>
@@ -981,6 +1102,36 @@ onMounted(() => {
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- 需求 3：台股已結清股票區塊 -->
+      <section class="portfolio" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0; color: #64748b;">台股已結清股票 (已未持股)</h3>
+        </div>
+        <div class="table-container">
+          <p v-if="taiwanClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清台股。</p>
+          <table v-else class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>交易次數</th>
+                <th>總賣出金額 (TWD)</th>
+                <th>已實現損益 (TWD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in taiwanClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                <td><strong>{{ stock.ticker }}</strong></td>
+                <td>{{ stock.txCount }} 次</td>
+                <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</td>
+                <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -1107,6 +1258,36 @@ onMounted(() => {
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- 需求 3：美股已結清股票區塊 -->
+      <section class="portfolio" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 12px;">
+          <h3 style="margin: 0; color: #64748b;">美股已結清股票 (已未持股)</h3>
+        </div>
+        <div class="table-container">
+          <p v-if="usClosedPortfolio.length === 0" class="empty-msg" style="padding: 15px;">目前無已結清美股。</p>
+          <table v-else class="stock-table">
+            <thead>
+              <tr>
+                <th>標的</th>
+                <th>交易次數</th>
+                <th>總賣出金額 (USD)</th>
+                <th>已實現損益 (USD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="stock in usClosedPortfolio" :key="stock.ticker" @click="selectedTickerModal = stock.ticker">
+                <td><strong>{{ stock.ticker }}</strong></td>
+                <td>{{ stock.txCount }} 次</td>
+                <td>${{ stock.totalSellAmount.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}</td>
+                <td :class="stock.realizedPnL >= 0 ? 'profit' : 'loss'">
+                  ${{ stock.realizedPnL.toLocaleString(undefined, { maximumFractionDigits: 2 }) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -1331,6 +1512,27 @@ onMounted(() => {
           <div class="form-actions">
             <button type="button" @click="showGBForm = false; resetGBForm();" class="cancel-btn">取消</button>
             <button type="submit" class="submit-btn">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 個股目標與警戒價設定彈窗 -->
+    <div v-if="showTargetModal" class="modal-overlay" @click.self="showTargetModal = false">
+      <div class="modal-content">
+        <h3>設定 {{ targetFormTicker }} 目標/警戒價</h3>
+        <form @submit.prevent="saveTargetSetting">
+          <div class="form-group">
+            <label>目標價</label>
+            <input v-model="targetFormVal.targetPrice" type="number" step="any" placeholder="設定目標停利價">
+          </div>
+          <div class="form-group">
+            <label>停損價</label>
+            <input v-model="targetFormVal.stopPrice" type="number" step="any" placeholder="設定停損警戒價">
+          </div>
+          <div class="form-actions">
+            <button type="button" @click="showTargetModal = false" class="cancel-btn">取消</button>
+            <button type="submit" class="submit-btn">儲存設定</button>
           </div>
         </form>
       </div>
