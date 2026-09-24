@@ -36,26 +36,28 @@ const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
 const GB_DB_KEY = 'gold_bonds_records'
 const DAILY_ASSET_DB_KEY = 'daily_asset_snapshots'
-const FUNDS_DB_KEY = 'funds_records' // 新增：基金交易紀錄資料庫
+const FUNDS_DB_KEY = 'funds_records'
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
 const goldBondsAssetsTWD = ref(0)
-const fundsAssetsTWD = ref(0) // 新增：基金總市值 TWD
-const totalRealizedPnLTWD = ref(0)
+const fundsAssetsTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
 const taiwanUnrealizedPnL = ref(0)
+const taiwanRealizedPnLTWD = ref(0) // 新增：台股已實現損益 (TWD)
+
 const usTotalCost = ref(0)
 const usUnrealizedPnL = ref(0)
+const usRealizedPnLUSD = ref(0) // 新增：美股已實現損益 (USD)
 
 const goldBondsTotalCost = ref(0)
 const goldBondsUnrealizedPnL = ref(0)
 
-const fundsTotalCost = ref(0) // 新增：基金總成本 TWD
-const fundsUnrealizedPnL = ref(0) // 新增：基金未實現損益 TWD
+const fundsTotalCost = ref(0)
+const fundsUnrealizedPnL = ref(0)
 
 // 分市場股利統計
 const taiwanTotalDividendTWD = ref(0)
@@ -76,8 +78,8 @@ const transactions = ref([])
 const goldBondsTransactions = ref([])
 const goldBondsPortfolioRaw = ref([])
 
-const fundsTransactions = ref([]) // 新增：基金交易明細
-const fundsPortfolioRaw = ref([]) // 新增：基金持倉統計列表
+const fundsTransactions = ref([])
+const fundsPortfolioRaw = ref([])
 
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
@@ -99,19 +101,19 @@ const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
 const isFundsOpen = ref(true)
-const isFundsHistoryOpen = ref(false) // 新增：基金歷史紀錄展開控制
+const isFundsHistoryOpen = ref(false)
 
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
 const showGBForm = ref(false)
-const showFundForm = ref(false) // 新增：基金表單彈窗控制
-const showNavUpdateModal = ref(false) // 新增：手動更新 NAV 彈窗控制
+const showFundForm = ref(false)
+const showNavUpdateModal = ref(false)
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const selectedGBNameModal = ref(null)
-const selectedFundNameModal = ref(null) // 新增：選擇特定基金歷史彈窗
+const selectedFundNameModal = ref(null)
 
 const targetFormTicker = ref('')
 const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
@@ -123,7 +125,7 @@ const navUpdateVal = ref(null)
 // 編輯交易狀態
 const editingTxId = ref(null)
 const editingGBTxId = ref(null)
-const editingFundTxId = ref(null) // 新增：編輯基金交易 ID
+const editingFundTxId = ref(null)
 
 const formData = ref({
   ticker: '',
@@ -150,7 +152,6 @@ const gbFormData = ref({
   dividendCash: 0
 })
 
-// 新增：基金交易表單資料
 const fundFormData = ref({
   name: '',
   code: '',
@@ -405,7 +406,7 @@ const calculatePortfolio = async () => {
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
   let runningSummary = {}
 
-  // 1. 計算股票已實現損益與累積股利
+  // 1. 分別計算台股與美股的已實現損益與累積股利
   sortedTx.forEach(tx => {
     const year = tx.date ? tx.date.split('-')[0] : '未知年份'
     if (!runningSummary[tx.ticker]) {
@@ -446,6 +447,10 @@ const calculatePortfolio = async () => {
       }
     }
   })
+
+  // 分別指定給台股與美股各自的已實現損益變數
+  taiwanRealizedPnLTWD.value = realizedTWD
+  usRealizedPnLUSD.value = realizedUSD
 
   // 2. 統計股票當前持股庫存
   sortedTx.forEach(tx => {
@@ -546,7 +551,7 @@ const calculatePortfolio = async () => {
   goldBondsTotalCost.value = gbCostSum
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
-  // --- 新增：基金庫存統計邏輯 (方案 ABC 整合) ---
+  // --- 基金庫存統計邏輯 ---
   const fundSummary = {}
   const fundLatestNAV = {}
 
@@ -592,13 +597,11 @@ const calculatePortfolio = async () => {
     if (item.units > 0) {
       let nav = fundLatestNAV[name]
 
-      // 方案 C：若是境外基金或有 Yahoo 代號，試圖向 Yahoo 抓最新報價
       if (item.code) {
         const yahooInfo = await fetchStockData(item.code)
         if (yahooInfo.price > 0) nav = yahooInfo.price
       }
 
-      // 若未取得自動報價，預設採用交易時的最新 NAV，無則採用均價
       if (!nav || nav === 0) {
         nav = item.units > 0 ? (item.totalCost / item.units) : 0
       }
@@ -607,7 +610,6 @@ const calculatePortfolio = async () => {
       item.avgCost = item.units > 0 ? (item.totalCost / item.units) : 0
       item.marketValue = item.units * item.currentNav
 
-      // 方案 B：自動考量美金/外幣與台幣匯率折算
       const rate = exchangeRates.value[item.currency] || 1
       const costTWD = item.totalCost * rate
       const valTWD = item.marketValue * rate
@@ -628,7 +630,6 @@ const calculatePortfolio = async () => {
   fundsTotalCost.value = fCostSum
   fundsUnrealizedPnL.value = fValueSum - fCostSum
 
-  totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRates.value.USD)
   taiwanTotalDividendTWD.value = twDivTotal
   taiwanYearlyDividendSummary.value = twYearlyDivs
   usTotalDividendTWD.value = usDivTotal
@@ -875,7 +876,6 @@ const saveGBTransaction = async () => {
   await calculatePortfolio()
 }
 
-// 新增：儲存基金交易紀錄
 const saveFundTransaction = async () => {
   if (editingFundTxId.value) {
     const index = fundsTransactions.value.findIndex(tx => tx.id === editingFundTxId.value)
@@ -918,11 +918,9 @@ const saveFundTransaction = async () => {
   await calculatePortfolio()
 }
 
-// 新增：手動更新基金最新淨值 (NAV)
 const saveUpdatedNAV = async () => {
   if (!navUpdateItemName.value || !navUpdateVal.value) return
 
-  // 新增一筆配息/淨值更新屬性紀錄
   const newTx = {
     id: crypto.randomUUID(),
     name: navUpdateItemName.value,
@@ -1040,7 +1038,7 @@ const importBackup = async (event) => {
       }
       if (content.fundsTransactions && Array.isArray(content.fundsTransactions)) {
         fundsTransactions.value = content.fundsTransactions
-        await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(fundsTransactions.value)))
+        await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(content.fundsTransactions)))
       }
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
@@ -1230,19 +1228,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 已實現總損益 -->
-      <div class="sub-assets-box" style="margin-top: 8px;">
-        <div class="market-summary-item" style="border-right: none;">
-          <span>已實現總損益</span>
-          <br>
-          <small>損益：
-            <strong :class="totalRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
-              ${{ totalRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD
-            </strong>
-          </small>
-        </div>
-      </div>
-
       <!-- 圖表區塊 -->
       <section class="chart-section" style="margin-top: 15px;">
         <div class="chart-header-row">
@@ -1268,11 +1253,16 @@ onMounted(() => {
     </div>
 
     <!-- ========================================== -->
-    <!-- 2. 台股子目錄 (TW) - 帶有卡片折疊收合功能 -->
+    <!-- 2. 台股子目錄 (TW) - 新增台股已實現損益 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'TW'">
       <div class="dividend-summary-box">
         <p><strong>台股總累積現金股利：</strong> <span class="div-highlight">${{ taiwanTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <p style="margin-top: 6px;"><strong>台股累積已實現損益：</strong> 
+          <span :class="taiwanRealizedPnLTWD >= 0 ? 'profit' : 'loss'">
+            ${{ taiwanRealizedPnLTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD
+          </span>
+        </p>
         <div class="yearly-div-list" v-if="Object.keys(taiwanYearlyDividendSummary).length > 0">
           <small v-for="(val, yr) in taiwanYearlyDividendSummary" :key="yr" class="yearly-tag">
             {{ yr }}年: ${{ val.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
@@ -1424,11 +1414,17 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 3. 美股子目錄 (US) - 帶有卡片折疊收合功能 -->
+    <!-- 3. 美股子目錄 (US) - 新增美股已實現損益 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'US'">
       <div class="dividend-summary-box">
         <p><strong>美股總累積現金股利：</strong> <span class="div-highlight">${{ usTotalDividendTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span></p>
+        <p style="margin-top: 6px;"><strong>美股累積已實現損益：</strong> 
+          <span :class="usRealizedPnLUSD >= 0 ? 'profit' : 'loss'">
+            ${{ usRealizedPnLUSD.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} USD
+            <small style="color: #64748b; font-weight: normal;">(約 ${{ (usRealizedPnLUSD * exchangeRates.USD).toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD)</small>
+          </span>
+        </p>
         <div class="yearly-div-list" v-if="Object.keys(usYearlyDividendSummary).length > 0">
           <small v-for="(val, yr) in usYearlyDividendSummary" :key="yr" class="yearly-tag">
             {{ yr }}年: ${{ val.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}
@@ -1580,7 +1576,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 4. 基金子目錄 (funds) - 方案 ABC 整合版 -->
+    <!-- 4. 基金子目錄 (funds) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'funds'">
       <section class="portfolio">
@@ -1652,7 +1648,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 5. 黃金/債券子目錄 (gold_bonds) - 帶有卡片折疊收合功能 -->
+    <!-- 5. 黃金/債券子目錄 (gold_bonds) -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'gold_bonds'">
       <section class="portfolio">
@@ -1724,7 +1720,7 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- 浮動新增按鈕 (依據當前選單自動對應新增類型) -->
+    <!-- 浮動新增按鈕 -->
     <button 
       @click="currentTab === 'gold_bonds' ? showGBForm = true : currentTab === 'funds' ? showFundForm = true : showForm = true" 
       class="fab-button" 
