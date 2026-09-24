@@ -35,13 +35,15 @@ localforage.config({ name: 'StockTrackerDB', storeName: 'transactions_store' })
 const DB_KEY = 'tx_records'
 const TARGET_DB_KEY = 'stock_targets'
 const GB_DB_KEY = 'gold_bonds_records'
-const DAILY_ASSET_DB_KEY = 'daily_asset_snapshots' // 新增：每日資產快照紀錄
+const DAILY_ASSET_DB_KEY = 'daily_asset_snapshots'
+const FUNDS_DB_KEY = 'funds_records' // 新增：基金交易紀錄資料庫
 
 // --- 響應式變數 ---
 const totalAssetsTWD = ref(0)
 const taiwanAssetsTWD = ref(0)
 const usAssetsTWD = ref(0)
 const goldBondsAssetsTWD = ref(0)
+const fundsAssetsTWD = ref(0) // 新增：基金總市值 TWD
 const totalRealizedPnLTWD = ref(0)
 
 const taiwanTotalCost = ref(0)
@@ -51,6 +53,9 @@ const usUnrealizedPnL = ref(0)
 
 const goldBondsTotalCost = ref(0)
 const goldBondsUnrealizedPnL = ref(0)
+
+const fundsTotalCost = ref(0) // 新增：基金總成本 TWD
+const fundsUnrealizedPnL = ref(0) // 新增：基金未實現損益 TWD
 
 // 分市場股利統計
 const taiwanTotalDividendTWD = ref(0)
@@ -70,6 +75,9 @@ const exchangeRates = ref({
 const transactions = ref([])
 const goldBondsTransactions = ref([])
 const goldBondsPortfolioRaw = ref([])
+
+const fundsTransactions = ref([]) // 新增：基金交易明細
+const fundsPortfolioRaw = ref([]) // 新增：基金持倉統計列表
 
 const taiwanPortfolioRaw = ref([])
 const usPortfolioRaw = ref([])
@@ -91,21 +99,31 @@ const isUsHistoryOpen = ref(false)
 const isGBOpen = ref(true)
 const isGBHistoryOpen = ref(false)
 const isFundsOpen = ref(true)
+const isFundsHistoryOpen = ref(false) // 新增：基金歷史紀錄展開控制
 
 const chartType = ref('line')
 const barMarketTab = ref('TW')
 
 const showForm = ref(false)
 const showGBForm = ref(false)
+const showFundForm = ref(false) // 新增：基金表單彈窗控制
+const showNavUpdateModal = ref(false) // 新增：手動更新 NAV 彈窗控制
 const showTargetModal = ref(false)
 const selectedTickerModal = ref(null)
 const selectedGBNameModal = ref(null)
+const selectedFundNameModal = ref(null) // 新增：選擇特定基金歷史彈窗
+
 const targetFormTicker = ref('')
 const targetFormVal = ref({ targetPrice: '', stopPrice: '' })
+
+// 手動更新淨值用
+const navUpdateItemName = ref('')
+const navUpdateVal = ref(null)
 
 // 編輯交易狀態
 const editingTxId = ref(null)
 const editingGBTxId = ref(null)
+const editingFundTxId = ref(null) // 新增：編輯基金交易 ID
 
 const formData = ref({
   ticker: '',
@@ -127,6 +145,20 @@ const gbFormData = ref({
   amount: null,
   price: null,
   marketValue: null,
+  fee: 0,
+  currency: 'TWD',
+  dividendCash: 0
+})
+
+// 新增：基金交易表單資料
+const fundFormData = ref({
+  name: '',
+  code: '',
+  date: new Date().toISOString().split('T')[0],
+  type: '買進',
+  units: null,
+  price: null,
+  currentNav: null,
   fee: 0,
   currency: 'TWD',
   dividendCash: 0
@@ -177,7 +209,7 @@ const usPortfolio = computed(() => {
   return list.sort((a, b) => b.marketValue - a.marketValue)
 })
 
-// 修正：篩選已結清（股數為0，但有交易記錄）的台股標的，正確計算已實現損益
+// 篩選已結清（股數為0，但有交易記錄）的台股標的
 const taiwanClosedPortfolio = computed(() => {
   const allTickers = [...new Set(taiwanTransactions.value.map(tx => tx.ticker))]
   const closed = []
@@ -207,7 +239,6 @@ const taiwanClosedPortfolio = computed(() => {
         if (shares <= 0) { shares = 0; totalCost = 0; }
       } else if (tx.type === '配息') {
         if (tx.dividendShares) shares += Number(tx.dividendShares)
-        // 配息不扣減持股總成本，維持真實資本利得計算
       }
     })
 
@@ -224,7 +255,7 @@ const taiwanClosedPortfolio = computed(() => {
   return closed
 })
 
-// 修正：篩選已結清（股數為0，但有交易記錄）的美股標的，正確計算已實現損益
+// 篩選已結清（股數為0，但有交易記錄）的美股標的
 const usClosedPortfolio = computed(() => {
   const allTickers = [...new Set(usTransactions.value.map(tx => tx.ticker))]
   const closed = []
@@ -254,7 +285,6 @@ const usClosedPortfolio = computed(() => {
         if (shares <= 0) { shares = 0; totalCost = 0; }
       } else if (tx.type === '配息') {
         if (tx.dividendShares) shares += Number(tx.dividendShares)
-        // 配息不扣減持股總成本，維持真實資本利得計算
       }
     })
 
@@ -375,7 +405,7 @@ const calculatePortfolio = async () => {
   const sortedTx = [...transactions.value].sort((a, b) => new Date(a.date) - new Date(b.date))
   let runningSummary = {}
 
-  // 1. 正確計算已實現損益與累積股利
+  // 1. 計算股票已實現損益與累積股利
   sortedTx.forEach(tx => {
     const year = tx.date ? tx.date.split('-')[0] : '未知年份'
     if (!runningSummary[tx.ticker]) {
@@ -403,7 +433,6 @@ const calculatePortfolio = async () => {
       if (tx.dividendShares) item.shares += Number(tx.dividendShares)
       if (tx.dividendCash) {
         const cashVal = Number(tx.dividendCash)
-        // 股利不扣減持股成本，避免算出的資本利得失真
         if (tx.currency === 'USD') {
           const cashInTWD = cashVal * exchangeRates.value.USD
           usDivTotal += cashInTWD
@@ -418,7 +447,7 @@ const calculatePortfolio = async () => {
     }
   })
 
-  // 2. 統計當前持股庫存
+  // 2. 統計股票當前持股庫存
   sortedTx.forEach(tx => {
     if (!summary[tx.ticker]) {
       summary[tx.ticker] = { ticker: tx.ticker, name: tx.ticker, shares: 0, totalCost: 0, currency: tx.currency }
@@ -517,6 +546,88 @@ const calculatePortfolio = async () => {
   goldBondsTotalCost.value = gbCostSum
   goldBondsUnrealizedPnL.value = gbValueSum - gbCostSum
 
+  // --- 新增：基金庫存統計邏輯 (方案 ABC 整合) ---
+  const fundSummary = {}
+  const fundLatestNAV = {}
+
+  fundsTransactions.value.forEach(tx => {
+    if (!fundSummary[tx.name]) {
+      fundSummary[tx.name] = { 
+        name: tx.name, 
+        code: tx.code || '', 
+        units: 0, 
+        totalCost: 0, 
+        currency: tx.currency || 'TWD', 
+        totalDividend: 0 
+      }
+    }
+    const item = fundSummary[tx.name]
+    if (tx.type === '買進') {
+      item.units += Number(tx.units)
+      item.totalCost += (Number(tx.price) * Number(tx.units)) + Number(tx.fee || 0)
+      if (tx.currentNav) fundLatestNAV[tx.name] = Number(tx.currentNav)
+    } else if (tx.type === '賣出' && item.units > 0) {
+      const avgCost = item.totalCost / item.units
+      const sellUnits = Number(tx.units)
+      const costOfSold = avgCost * sellUnits
+      item.units -= sellUnits
+      item.totalCost -= costOfSold
+      if (item.units <= 0) { item.units = 0; item.totalCost = 0; }
+      if (tx.currentNav) fundLatestNAV[tx.name] = Number(tx.currentNav)
+    } else if (tx.type === '配息') {
+      if (tx.dividendCash) {
+        item.totalDividend += Number(tx.dividendCash)
+      }
+      if (tx.currentNav) fundLatestNAV[tx.name] = Number(tx.currentNav)
+    }
+  })
+
+  let fTWD = 0
+  let fCostSum = 0
+  let fValueSum = 0
+  const fList = []
+
+  for (const name in fundSummary) {
+    const item = fundSummary[name]
+    if (item.units > 0) {
+      let nav = fundLatestNAV[name]
+
+      // 方案 C：若是境外基金或有 Yahoo 代號，試圖向 Yahoo 抓最新報價
+      if (item.code) {
+        const yahooInfo = await fetchStockData(item.code)
+        if (yahooInfo.price > 0) nav = yahooInfo.price
+      }
+
+      // 若未取得自動報價，預設採用交易時的最新 NAV，無則採用均價
+      if (!nav || nav === 0) {
+        nav = item.units > 0 ? (item.totalCost / item.units) : 0
+      }
+
+      item.currentNav = nav
+      item.avgCost = item.units > 0 ? (item.totalCost / item.units) : 0
+      item.marketValue = item.units * item.currentNav
+
+      // 方案 B：自動考量美金/外幣與台幣匯率折算
+      const rate = exchangeRates.value[item.currency] || 1
+      const costTWD = item.totalCost * rate
+      const valTWD = item.marketValue * rate
+
+      item.unrealizedPnL = valTWD - costTWD
+      item.pnlPercent = costTWD > 0 ? (item.unrealizedPnL / costTWD) * 100 : 0
+
+      fTWD += valTWD
+      fCostSum += costTWD
+      fValueSum += valTWD
+
+      fList.push(item)
+    }
+  }
+
+  fundsPortfolioRaw.value = fList
+  fundsAssetsTWD.value = fTWD
+  fundsTotalCost.value = fCostSum
+  fundsUnrealizedPnL.value = fValueSum - fCostSum
+
   totalRealizedPnLTWD.value = realizedTWD + (realizedUSD * exchangeRates.value.USD)
   taiwanTotalDividendTWD.value = twDivTotal
   taiwanYearlyDividendSummary.value = twYearlyDivs
@@ -569,7 +680,8 @@ const calculatePortfolio = async () => {
     }
   }
 
-  totalTWD = twTWD + usTWD + gbTWD
+  // 總資產整合：台股 + 美股 + 黃金債券 + 基金
+  totalTWD = twTWD + usTWD + gbTWD + fTWD
 
   taiwanPortfolioRaw.value = twList
   usPortfolioRaw.value = usList
@@ -582,19 +694,18 @@ const calculatePortfolio = async () => {
   usTotalCost.value = usCostSumTWD
   usUnrealizedPnL.value = usValueSumTWD - usCostSumTWD
 
-  // 3. 重構：紀錄每日真實淨資產快照並繪製資產折線圖
+  // 紀錄當日真實淨資產快照並繪製折線圖
   await recordAndRenderDailyAssetHistory(totalTWD)
 
   updateBarChartData()
   isCalculating.value = false
 }
 
-// 新增：紀錄當日真實資產總市值快照並繪製折線圖
+// 紀錄當日真實資產總市值快照並繪製折線圖
 const recordAndRenderDailyAssetHistory = async (currentTotalTWD) => {
   const todayStr = new Date().toISOString().split('T')[0]
   let snapshots = (await localforage.getItem(DAILY_ASSET_DB_KEY)) || {}
 
-  // 更新今天的市值快照（單位：TWD）
   if (currentTotalTWD > 0) {
     snapshots[todayStr] = Math.round(currentTotalTWD)
     await localforage.setItem(DAILY_ASSET_DB_KEY, JSON.parse(JSON.stringify(snapshots)))
@@ -657,6 +768,8 @@ const loadTransactions = async () => {
   if (savedData) transactions.value = savedData
   const savedGB = await localforage.getItem(GB_DB_KEY)
   if (savedGB) goldBondsTransactions.value = savedGB
+  const savedFunds = await localforage.getItem(FUNDS_DB_KEY)
+  if (savedFunds) fundsTransactions.value = savedFunds
   const savedTargets = await localforage.getItem(TARGET_DB_KEY)
   if (savedTargets) stockTargets.value = savedTargets
   await calculatePortfolio()
@@ -762,6 +875,75 @@ const saveGBTransaction = async () => {
   await calculatePortfolio()
 }
 
+// 新增：儲存基金交易紀錄
+const saveFundTransaction = async () => {
+  if (editingFundTxId.value) {
+    const index = fundsTransactions.value.findIndex(tx => tx.id === editingFundTxId.value)
+    if (index !== -1) {
+      fundsTransactions.value[index] = {
+        ...fundsTransactions.value[index],
+        name: fundFormData.value.name.trim(),
+        code: fundFormData.value.code.trim(),
+        date: fundFormData.value.date,
+        type: fundFormData.value.type,
+        units: Number(fundFormData.value.units) || 0,
+        price: Number(fundFormData.value.price) || 0,
+        currentNav: Number(fundFormData.value.currentNav) || 0,
+        fee: Number(fundFormData.value.fee) || 0,
+        currency: fundFormData.value.currency,
+        dividendCash: Number(fundFormData.value.dividendCash) || 0
+      }
+    }
+    editingFundTxId.value = null
+  } else {
+    const newTx = {
+      id: crypto.randomUUID(),
+      name: fundFormData.value.name.trim(),
+      code: fundFormData.value.code.trim(),
+      date: fundFormData.value.date,
+      type: fundFormData.value.type,
+      units: Number(fundFormData.value.units) || 0,
+      price: Number(fundFormData.value.price) || 0,
+      currentNav: Number(fundFormData.value.currentNav) || 0,
+      fee: Number(fundFormData.value.fee) || 0,
+      currency: fundFormData.value.currency,
+      dividendCash: Number(fundFormData.value.dividendCash) || 0
+    }
+    fundsTransactions.value.push(newTx)
+  }
+
+  await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(fundsTransactions.value)))
+  showFundForm.value = false
+  resetFundForm()
+  await calculatePortfolio()
+}
+
+// 新增：手動更新基金最新淨值 (NAV)
+const saveUpdatedNAV = async () => {
+  if (!navUpdateItemName.value || !navUpdateVal.value) return
+
+  // 新增一筆配息/淨值更新屬性紀錄
+  const newTx = {
+    id: crypto.randomUUID(),
+    name: navUpdateItemName.value,
+    code: '',
+    date: new Date().toISOString().split('T')[0],
+    type: '配息',
+    units: 0,
+    price: 0,
+    currentNav: Number(navUpdateVal.value),
+    fee: 0,
+    currency: 'TWD',
+    dividendCash: 0
+  }
+  fundsTransactions.value.push(newTx)
+
+  await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(fundsTransactions.value)))
+  showNavUpdateModal.value = false
+  navUpdateVal.value = null
+  await calculatePortfolio()
+}
+
 const editGBTransaction = (tx) => {
   editingGBTxId.value = tx.id
   gbFormData.value = {
@@ -780,9 +962,33 @@ const editGBTransaction = (tx) => {
   showGBForm.value = true
 }
 
+const editFundTransaction = (tx) => {
+  editingFundTxId.value = tx.id
+  fundFormData.value = {
+    name: tx.name,
+    code: tx.code || '',
+    date: tx.date,
+    type: tx.type,
+    units: tx.units,
+    price: tx.price,
+    currentNav: tx.currentNav || 0,
+    fee: tx.fee || 0,
+    currency: tx.currency || 'TWD',
+    dividendCash: tx.dividendCash || 0
+  }
+  selectedFundNameModal.value = null
+  showFundForm.value = true
+}
+
 const deleteGBTransaction = async (id) => {
   goldBondsTransactions.value = goldBondsTransactions.value.filter(tx => tx.id !== id)
   await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
+  await calculatePortfolio()
+}
+
+const deleteFundTransaction = async (id) => {
+  fundsTransactions.value = fundsTransactions.value.filter(tx => tx.id !== id)
+  await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(fundsTransactions.value)))
   await calculatePortfolio()
 }
 
@@ -797,6 +1003,7 @@ const exportBackup = async () => {
   const backupData = {
     transactions: transactions.value,
     goldBondsTransactions: goldBondsTransactions.value,
+    fundsTransactions: fundsTransactions.value,
     stockTargets: stockTargets.value,
     dailyAssetSnapshots: snapshots,
     exportDate: new Date().toISOString()
@@ -831,6 +1038,10 @@ const importBackup = async (event) => {
         goldBondsTransactions.value = content.goldBondsTransactions
         await localforage.setItem(GB_DB_KEY, JSON.parse(JSON.stringify(goldBondsTransactions.value)))
       }
+      if (content.fundsTransactions && Array.isArray(content.fundsTransactions)) {
+        fundsTransactions.value = content.fundsTransactions
+        await localforage.setItem(FUNDS_DB_KEY, JSON.parse(JSON.stringify(fundsTransactions.value)))
+      }
       if (content.stockTargets) {
         stockTargets.value = content.stockTargets
         await localforage.setItem(TARGET_DB_KEY, JSON.parse(JSON.stringify(stockTargets.value)))
@@ -857,6 +1068,12 @@ const openTargetModal = (ticker) => {
     stopPrice: existing.stopPrice || ''
   }
   showTargetModal.value = true
+}
+
+const openNavUpdateModal = (name) => {
+  navUpdateItemName.value = name
+  navUpdateVal.value = null
+  showNavUpdateModal.value = true
 }
 
 const saveTargetSetting = async () => {
@@ -900,6 +1117,22 @@ const resetGBForm = () => {
   }
 }
 
+const resetFundForm = () => {
+  editingFundTxId.value = null
+  fundFormData.value = {
+    name: '',
+    code: '',
+    date: new Date().toISOString().split('T')[0],
+    type: '買進',
+    units: null,
+    price: null,
+    currentNav: null,
+    fee: 0,
+    currency: 'TWD',
+    dividendCash: 0
+  }
+}
+
 const filteredTransactionsByTicker = computed(() => {
   if (!selectedTickerModal.value) return []
   return transactions.value.filter(tx => tx.ticker === selectedTickerModal.value)
@@ -910,9 +1143,14 @@ const filteredGBTransactionsByName = computed(() => {
   return goldBondsTransactions.value.filter(tx => tx.name === selectedGBNameModal.value)
 })
 
+const filteredFundTransactionsByName = computed(() => {
+  if (!selectedFundNameModal.value) return []
+  return fundsTransactions.value.filter(tx => tx.name === selectedFundNameModal.value)
+})
+
 onMounted(() => {
   loadTransactions()
-  setupDailyAutoUpdate() // 啟動每日晚上 21:00 定時更新
+  setupDailyAutoUpdate()
 })
 </script>
 
@@ -971,6 +1209,16 @@ onMounted(() => {
 
       <div class="sub-assets-box" style="margin-top: 8px;">
         <div class="market-summary-item">
+          <span>基金市值：${{ fundsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
+          <br>
+          <small>未實現：
+            <strong :class="fundsUnrealizedPnL >= 0 ? 'profit' : 'loss'">
+              ${{ fundsUnrealizedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD 
+              ({{ fundsTotalCost > 0 ? ((fundsUnrealizedPnL / fundsTotalCost) * 100).toFixed(2) : 0 }}%)
+            </strong>
+          </small>
+        </div>
+        <div class="market-summary-item">
           <span>黃金/債券市值：${{ goldBondsAssetsTWD.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</span>
           <br>
           <small>未實現：
@@ -980,7 +1228,11 @@ onMounted(() => {
             </strong>
           </small>
         </div>
-        <div class="market-summary-item">
+      </div>
+
+      <!-- 已實現總損益 -->
+      <div class="sub-assets-box" style="margin-top: 8px;">
+        <div class="market-summary-item" style="border-right: none;">
           <span>已實現總損益</span>
           <br>
           <small>損益：
@@ -1328,7 +1580,7 @@ onMounted(() => {
     </main>
 
     <!-- ========================================== -->
-    <!-- 4. 基金子目錄 (funds) - 帶有折疊收合功能 -->
+    <!-- 4. 基金子目錄 (funds) - 方案 ABC 整合版 -->
     <!-- ========================================== -->
     <main v-if="currentTab === 'funds'">
       <section class="portfolio">
@@ -1340,9 +1592,61 @@ onMounted(() => {
         </div>
 
         <div v-show="isFundsOpen">
-          <section class="placeholder-section" style="margin-top: 0;">
-            <p class="empty-msg">此子目錄建置中，稍待將新增基金相關追蹤功能。</p>
-          </section>
+          <p v-if="fundsPortfolioRaw.length === 0" class="empty-msg">目前無基金持倉。</p>
+          
+          <div v-else class="card-grid">
+            <div v-for="item in fundsPortfolioRaw" :key="item.name" class="stock-card">
+              <div class="card-header" @click="selectedFundNameModal = item.name">
+                <div>
+                  <strong class="stock-name">{{ item.name }}</strong> 
+                  <span class="stock-ticker" v-if="item.code">({{ item.code }})</span>
+                </div>
+                <span>{{ item.units.toLocaleString(undefined, { maximumFractionDigits: 2 }) }} 單位</span>
+              </div>
+              <div class="card-body" @click="selectedFundNameModal = item.name">
+                <p>申購均價 vs 最新淨值：<strong>${{ item.avgCost.toFixed(2) }}</strong> / <strong style="color: #0284c7;">${{ item.currentNav.toFixed(2) }} {{ item.currency }}</strong></p>
+                <p>當前總市值 (TWD)：<strong>${{ item.marketValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) }} TWD</strong></p>
+                <p v-if="item.totalDividend > 0">已領累積配息：${{ item.totalDividend.toLocaleString() }} {{ item.currency }}</p>
+                <p :class="item.unrealizedPnL >= 0 ? 'profit' : 'loss'">
+                  未實現損益：${{ item.unrealizedPnL.toFixed(0) }} TWD ({{ item.pnlPercent.toFixed(2) }}%)
+                </p>
+              </div>
+              <div class="card-footer-action">
+                <button @click="openNavUpdateModal(item.name)" class="target-setting-btn">更新最新淨值 (NAV)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 基金歷史紀錄專區 (可收合) -->
+      <section class="history-dark-section" style="margin-top: 20px;">
+        <div class="chart-header-row" style="margin-bottom: 0;">
+          <h3 style="margin: 0; border: none; padding: 0;">基金歷史紀錄</h3>
+          <button @click="isFundsHistoryOpen = !isFundsHistoryOpen" class="toggle-chart-btn" style="background: #334155; border-color: #475569; color: #f8fafc;">
+            {{ isFundsHistoryOpen ? '收起 🔼' : '展開 🔽' }}
+          </button>
+        </div>
+        
+        <div v-show="isFundsHistoryOpen" style="margin-top: 15px;">
+          <p v-if="fundsTransactions.length === 0" class="empty-dark-msg">目前無基金申購紀錄。</p>
+          <ul v-else class="tx-dark-list">
+            <li v-for="tx in fundsTransactions.slice().reverse()" :key="tx.id" class="tx-dark-item">
+              <div class="tx-info">
+                <strong class="tx-ticker">{{ tx.name }}</strong>
+                <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+                <br>
+                <small class="tx-sub">{{ tx.date }} | 
+                  <span v-if="tx.type !== '配息'">{{ tx.units }} 單位 @ NAV ${{ tx.price }} {{ tx.currency }}</span>
+                  <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }} <span v-if="tx.currentNav">| 更新NAV: ${{ tx.currentNav }}</span></span>
+                </small>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button @click="editFundTransaction(tx)" class="edit-dark-btn">修改</button>
+                <button @click="deleteFundTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+              </div>
+            </li>
+          </ul>
         </div>
       </section>
     </main>
@@ -1420,8 +1724,12 @@ onMounted(() => {
       </section>
     </main>
 
-    <!-- 浮動新增按鈕 -->
-    <button @click="currentTab === 'gold_bonds' ? showGBForm = true : showForm = true" class="fab-button" v-if="currentTab !== 'funds' && currentTab !== 'overview'">+</button>
+    <!-- 浮動新增按鈕 (依據當前選單自動對應新增類型) -->
+    <button 
+      @click="currentTab === 'gold_bonds' ? showGBForm = true : currentTab === 'funds' ? showFundForm = true : showForm = true" 
+      class="fab-button" 
+      v-if="currentTab !== 'overview'">+
+    </button>
 
     <!-- 新增股票交易彈窗 -->
     <div v-if="showForm" class="modal-overlay">
@@ -1460,6 +1768,67 @@ onMounted(() => {
           <div class="form-actions">
             <button type="button" @click="showForm = false; resetForm();" class="cancel-btn">取消</button>
             <button type="submit" class="submit-btn">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 新增/修改基金交易彈窗 -->
+    <div v-if="showFundForm" class="modal-overlay">
+      <div class="modal-content">
+        <h3>{{ editingFundTxId ? '修改基金紀錄' : '新增基金申購紀錄' }}</h3>
+        <form @submit.prevent="saveFundTransaction">
+          <div class="form-group"><label>基金名稱</label><input v-model="fundFormData.name" type="text" required placeholder="如：安聯台灣大壩基金 / 第一金AI"></div>
+          <div class="form-group"><label>代號 (選填，若有 Yahoo 報價代號可填寫)</label><input v-model="fundFormData.code" type="text" placeholder="如 0P00000XXX"></div>
+          <div class="form-group"><label>日期</label><input v-model="fundFormData.date" type="date" required></div>
+          <div class="form-group">
+            <label>幣別</label>
+            <select v-model="fundFormData.currency">
+              <option value="TWD">台幣 (TWD)</option>
+              <option value="USD">美金 (USD)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>交易類型</label>
+            <select v-model="fundFormData.type">
+              <option value="買進">買進 (申購)</option>
+              <option value="賣出">賣出 (贖回)</option>
+              <option value="配息">配息</option>
+            </select>
+          </div>
+
+          <template v-if="fundFormData.type !== '配息'">
+            <div class="form-group"><label>申購單位數</label><input v-model="fundFormData.units" type="number" step="any" required placeholder="輸入單位數"></div>
+            <div class="form-group"><label>申購時單位淨值 (NAV)</label><input v-model="fundFormData.price" type="number" step="any" required placeholder="輸入單位淨值"></div>
+            <div class="form-group"><label>當前最新單位淨值 (選填)</label><input v-model="fundFormData.currentNav" type="number" step="any" placeholder="若未填寫將預設與申購價相同"></div>
+            <div class="form-group"><label>手續費</label><input v-model="fundFormData.fee" type="number" step="any" required placeholder="0"></div>
+          </template>
+
+          <template v-else>
+            <div class="form-group"><label>本次獲得配息金額</label><input v-model="fundFormData.dividendCash" type="number" step="any" required placeholder="0"></div>
+            <div class="form-group"><label>更新最新單位淨值 (選填)</label><input v-model="fundFormData.currentNav" type="number" step="any" placeholder="輸入當前最新 NAV"></div>
+          </template>
+
+          <div class="form-actions">
+            <button type="button" @click="showFundForm = false; resetFundForm();" class="cancel-btn">取消</button>
+            <button type="submit" class="submit-btn">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 手動更新基金最新淨值彈窗 -->
+    <div v-if="showNavUpdateModal" class="modal-overlay" @click.self="showNavUpdateModal = false">
+      <div class="modal-content">
+        <h3>更新 {{ navUpdateItemName }} 最新淨值 (NAV)</h3>
+        <form @submit.prevent="saveUpdatedNAV">
+          <div class="form-group">
+            <label>最新單位淨值 (NAV)</label>
+            <input v-model="navUpdateVal" type="number" step="any" required placeholder="例如：125.4">
+          </div>
+          <div class="form-actions">
+            <button type="button" @click="showNavUpdateModal = false" class="cancel-btn">取消</button>
+            <button type="submit" class="submit-btn">更新淨值</button>
           </div>
         </form>
       </div>
@@ -1563,6 +1932,30 @@ onMounted(() => {
           </li>
         </ul>
         <button @click="selectedTickerModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
+      </div>
+    </div>
+
+    <!-- 基金項目歷史紀錄專屬彈窗 -->
+    <div v-if="selectedFundNameModal" class="modal-overlay" @click.self="selectedFundNameModal = null">
+      <div class="modal-content">
+        <h3>{{ selectedFundNameModal }} 歷史紀錄</h3>
+        <p v-if="filteredFundTransactionsByName.length === 0" class="empty-dark-msg">無相關紀錄。</p>
+        <ul v-else class="tx-dark-list" style="margin-top: 15px;">
+          <li v-for="tx in filteredFundTransactionsByName.slice().reverse()" :key="tx.id" class="tx-dark-item">
+            <div class="tx-info">
+              <span :class="{'tag-dark-buy': tx.type==='買進', 'tag-dark-sell': tx.type==='賣出', 'tag-dark-div': tx.type==='配息'}">{{ tx.type }}</span>
+              <small class="tx-sub">{{ tx.date }} | 
+                <span v-if="tx.type !== '配息'">{{ tx.units }} 單位 @ NAV ${{ tx.price }} {{ tx.currency }}</span>
+                <span v-else>配息: ${{ tx.dividendCash }} {{ tx.currency }}</span>
+              </small>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button @click="editFundTransaction(tx)" class="edit-dark-btn">修改</button>
+              <button @click="deleteFundTransaction(tx.id)" class="delete-dark-btn">刪除</button>
+            </div>
+          </li>
+        </ul>
+        <button @click="selectedFundNameModal = null" class="submit-btn" style="width: 100%; margin-top: 20px;">關閉</button>
       </div>
     </div>
 
